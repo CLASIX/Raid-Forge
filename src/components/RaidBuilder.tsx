@@ -1,0 +1,360 @@
+import { useEffect, useMemo, useState } from 'react';
+import { RosterMember, RaidSize, Day } from '../types';
+import { CLASS_COLORS, CLASS_ICONS, RAID_COMP_REQUIREMENTS } from '../utils/wowData';
+import { countWindowAvailability, getAvailabilityForSlot, sortMembersForWindow } from '../utils/availability';
+import { CalendarDays, Clock3, Users, X, Wand2, AlertTriangle, UserMinus, UserPlus } from 'lucide-react';
+
+interface Props {
+  members: RosterMember[];
+  raidSize: RaidSize;
+  onRaidSizeChange: (size: RaidSize) => void;
+}
+
+type GroupedRaidIds = { tanks: string[]; healers: string[]; dps: string[] };
+
+const DAY_OPTIONS: { value: Day; label: string }[] = [
+  { value: 'monday', label: 'Monday' },
+  { value: 'tuesday', label: 'Tuesday' },
+  { value: 'wednesday', label: 'Wednesday' },
+  { value: 'thursday', label: 'Thursday' },
+  { value: 'friday', label: 'Friday' },
+  { value: 'saturday', label: 'Saturday' },
+  { value: 'sunday', label: 'Sunday' },
+];
+
+const RAID_TIMES = ['5pm', '6pm', '7pm', '8pm', '9pm', '10pm', '11pm'];
+
+export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
+  const [targetDay, setTargetDay] = useState<Day>('tuesday');
+  const [targetTime, setTargetTime] = useState('8pm');
+  const [raidComp, setRaidComp] = useState<GroupedRaidIds>({ tanks: [], healers: [], dps: [] });
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+
+  const memberMap = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
+  const requirements = RAID_COMP_REQUIREMENTS[raidSize];
+
+  useEffect(() => {
+    setRaidComp((prev) => ({
+      tanks: prev.tanks.filter((id) => memberMap.has(id)),
+      healers: prev.healers.filter((id) => memberMap.has(id)),
+      dps: prev.dps.filter((id) => memberMap.has(id)),
+    }));
+  }, [memberMap]);
+
+  const selectedIds = new Set([...raidComp.tanks, ...raidComp.healers, ...raidComp.dps]);
+  const activeMembersPool = members.filter((m) => !excludedIds.has(m.id));
+  const windowCounts = countWindowAvailability(activeMembersPool, targetDay, targetTime);
+
+  const availableTanks = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'Tank' && !selectedIds.has(m.id)), targetDay, targetTime);
+  const availableHealers = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'Healer' && !selectedIds.has(m.id)), targetDay, targetTime);
+  const availableDPS = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'DPS' && !selectedIds.has(m.id)), targetDay, targetTime);
+  const availableUnknown = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'Unknown' && !selectedIds.has(m.id)), targetDay, targetTime);
+
+  const selectedTanks = raidComp.tanks.map((id) => memberMap.get(id)).filter((m): m is RosterMember => Boolean(m));
+  const selectedHealers = raidComp.healers.map((id) => memberMap.get(id)).filter((m): m is RosterMember => Boolean(m));
+  const selectedDPS = raidComp.dps.map((id) => memberMap.get(id)).filter((m): m is RosterMember => Boolean(m));
+
+  const totalInRaid = selectedTanks.length + selectedHealers.length + selectedDPS.length;
+  const selectedAvailableCount = [...selectedTanks, ...selectedHealers, ...selectedDPS]
+    .filter((m) => getAvailabilityForSlot(m, targetDay, targetTime).available).length;
+
+  const addToComp = (member: RosterMember, slot: keyof GroupedRaidIds) => {
+    setRaidComp((prev) => ({ ...prev, [slot]: [...prev[slot], member.id] }));
+  };
+  const removeFromComp = (id: string, slot: keyof GroupedRaidIds) => {
+    setRaidComp((prev) => ({ ...prev, [slot]: prev[slot].filter((x) => x !== id) }));
+  };
+  const clearComp = () => setRaidComp({ tanks: [], healers: [], dps: [] });
+
+  const excludePlayer = (id: string) => {
+    removeFromComp(id, 'tanks');
+    removeFromComp(id, 'healers');
+    removeFromComp(id, 'dps');
+    setExcludedIds((prev) => new Set([...prev, id]));
+  };
+  const unexcludePlayer = (id: string) => {
+    setExcludedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  };
+  const clearExcluded = () => setExcludedIds(new Set());
+
+  const autoFill = () => {
+    const pick = (pool: RosterMember[], count: number, taken: Set<string>) =>
+      pool.filter((m) => !taken.has(m.id) && getAvailabilityForSlot(m, targetDay, targetTime).available).slice(0, count).map((m) => m.id);
+
+    const tankIds = pick(availableTanks, requirements.tanks, new Set());
+    const healerIds = pick(availableHealers, requirements.healers, new Set(tankIds));
+    const dpsIds = pick(availableDPS, requirements.dps, new Set([...tankIds, ...healerIds]));
+    setRaidComp({ tanks: tankIds, healers: healerIds, dps: dpsIds });
+  };
+
+  const getStatusClasses = (status: string) => {
+    if (status === 'exact') return 'bg-emerald-900/40 text-emerald-300 border-emerald-700/40';
+    if (status === 'open') return 'bg-green-900/40 text-green-300 border-green-700/40';
+    if (status === 'within1hr') return 'bg-cyan-900/40 text-cyan-300 border-cyan-700/40';
+    if (status === 'tooEarly') return 'bg-orange-900/40 text-orange-300 border-orange-700/40';
+    if (status === 'tooLate') return 'bg-orange-900/40 text-orange-300 border-orange-700/40';
+    return 'bg-gray-900/40 text-gray-500 border-gray-700/40';
+  };
+
+  const SlotRow = ({ member, slot }: { member: RosterMember; slot: keyof GroupedRaidIds }) => {
+    const color = CLASS_COLORS[member.parsedClass];
+    const avail = getAvailabilityForSlot(member, targetDay, targetTime);
+    return (
+      <div className="rounded-xl border border-gray-700/40 bg-gray-900/60 p-2.5" style={{ borderLeftColor: color, borderLeftWidth: '3px' }}>
+        <div className="flex items-center gap-2">
+          <span className="text-base">{CLASS_ICONS[member.parsedClass]}</span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-sm font-bold text-white truncate">{member.name}</span>
+              <span className={`text-[11px] px-1.5 py-0.5 rounded-full border ${getStatusClasses(avail.status)}`}>{avail.shortLabel}</span>
+            </div>
+            <div className="text-xs" style={{ color }}>{member.parsedSpec}</div>
+          </div>
+          <button onClick={() => excludePlayer(member.id)} className="text-yellow-600 hover:text-yellow-400 transition-colors" title="Sit / exclude from this builder">
+            <UserMinus className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={() => removeFromComp(member.id, slot)} className="text-red-400 hover:text-red-300 transition-colors" title="Remove from slot">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const CandidateRow = ({ member, slot }: { member: RosterMember; slot: keyof GroupedRaidIds }) => {
+    const color = CLASS_COLORS[member.parsedClass];
+    const avail = getAvailabilityForSlot(member, targetDay, targetTime);
+    return (
+      <div className="flex items-center gap-2 w-full rounded-xl border border-gray-700/30 bg-gray-800/40 p-2.5 hover:border-yellow-500/60 hover:bg-yellow-900/10 transition-all" style={{ borderLeftColor: color, borderLeftWidth: '3px' }}>
+        <span className="text-base">{CLASS_ICONS[member.parsedClass]}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-sm font-bold text-white truncate">{member.name}</span>
+            <span className={`text-[11px] px-1.5 py-0.5 rounded-full border ${getStatusClasses(avail.status)}`}>{avail.shortLabel}</span>
+          </div>
+          <div className="text-xs" style={{ color }}>{member.parsedSpec}</div>
+        </div>
+        <button onClick={() => excludePlayer(member.id)} className="text-gray-600 hover:text-yellow-400 transition-colors" title="Sit / exclude">
+          <UserMinus className="w-3.5 h-3.5" />
+        </button>
+        <button onClick={() => addToComp(member, slot)} className="text-xs text-yellow-400 font-bold hover:text-yellow-300 px-1">+</button>
+      </div>
+    );
+  };
+
+  const excludedMembers = members.filter((m) => excludedIds.has(m.id));
+
+  const roleSummaries = [
+    { label: 'Tanks', icon: '🛡️', current: selectedTanks.length, required: requirements.tanks, color: 'text-blue-300', pool: windowCounts.tanks },
+    { label: 'Healers', icon: '💚', current: selectedHealers.length, required: requirements.healers, color: 'text-green-300', pool: windowCounts.healers },
+    { label: 'DPS', icon: '⚔️', current: selectedDPS.length, required: requirements.dps, color: 'text-red-300', pool: windowCounts.dps },
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* Controls */}
+      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 space-y-4">
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="flex gap-2 flex-wrap">
+              {([10, 20, 40] as RaidSize[]).map((size) => (
+                <button key={size} onClick={() => onRaidSizeChange(size)} className={`px-4 py-2 rounded-lg text-sm font-bold border transition-all ${raidSize === size ? 'bg-yellow-600 border-yellow-500 text-black' : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-gray-400'}`}>
+                  {size} Man
+                </button>
+              ))}
+            </div>
+            <div className="ml-auto flex gap-2 flex-wrap">
+              <button onClick={autoFill} className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors">
+                <Wand2 className="w-4 h-4" />
+                Auto Fill
+              </button>
+              <button onClick={clearComp} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors">Clear</button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Raid Day</label>
+              <div className="relative">
+                <CalendarDays className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <select value={targetDay} onChange={(e) => setTargetDay(e.target.value as Day)} className="w-full bg-gray-900 border border-gray-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:outline-none focus:border-yellow-500">
+                  {DAY_OPTIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Raid Start Time (EST)</label>
+              <div className="relative">
+                <Clock3 className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <select value={targetTime} onChange={(e) => setTargetTime(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:outline-none focus:border-yellow-500">
+                  {RAID_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-yellow-700/30 bg-yellow-900/10 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-bold text-white flex items-center gap-2"><Users className="w-4 h-4 text-yellow-400" /> Window Summary</span>
+              <span className="text-sm font-bold text-yellow-300">{selectedAvailableCount} / {totalInRaid} selected fit this time</span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="rounded-lg bg-gray-900/50 p-3 border border-gray-800">
+                <div className="text-xs text-gray-500">Available Pool</div>
+                <div className="text-2xl font-black text-white">{windowCounts.total}</div>
+                {excludedIds.size > 0 && <div className="text-[11px] text-yellow-600">{excludedIds.size} sitting out</div>}
+              </div>
+              {roleSummaries.map((item) => (
+                <div key={item.label} className="rounded-lg bg-gray-900/50 p-3 border border-gray-800">
+                  <div className="text-xs text-gray-500">{item.icon} {item.label}</div>
+                  <div className={`text-xl font-black ${item.color}`}>{item.pool}</div>
+                  <div className="text-[11px] text-gray-600">selected {item.current}/{item.required}</div>
+                </div>
+              ))}
+            </div>
+            {windowCounts.total < raidSize && (
+              <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-orange-700/40 bg-orange-900/20 px-3 py-2 text-xs text-orange-300">
+                <AlertTriangle className="w-4 h-4" />
+                Not enough players available for a full {raidSize}-man.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Legend + Bench */}
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
+            <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Availability Window</h3>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-lg border border-emerald-700/40 bg-emerald-900/20 px-3 py-2 text-emerald-300">Exact time match</div>
+              <div className="rounded-lg border border-green-700/40 bg-green-900/20 px-3 py-2 text-green-300">Open / flexible</div>
+              <div className="rounded-lg border border-cyan-700/40 bg-cyan-900/20 px-3 py-2 text-cyan-300">Within 1hr of preferred</div>
+              <div className="rounded-lg border border-orange-700/40 bg-orange-900/20 px-3 py-2 text-orange-300">Outside 1hr window</div>
+            </div>
+            <div className="text-xs text-gray-500 leading-relaxed">
+              Players are only counted as available if their preferred start time is within ±1 hour of the raid time.
+            </div>
+          </div>
+
+          {/* Excluded / Bench */}
+          <div className="rounded-2xl border border-yellow-800/30 bg-yellow-950/10 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-yellow-300 uppercase tracking-wider flex items-center gap-2">
+                <UserMinus className="w-4 h-4" />
+                Bench / Sitting Out ({excludedMembers.length})
+              </h3>
+              {excludedMembers.length > 0 && (
+                <button onClick={clearExcluded} className="text-xs text-gray-400 hover:text-white transition-colors">
+                  Clear all
+                </button>
+              )}
+            </div>
+            {excludedMembers.length === 0 ? (
+              <p className="text-xs text-gray-600">Click the <UserMinus className="w-3 h-3 inline" /> icon on any player to sit them out when they're in enough raid groups.</p>
+            ) : (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {excludedMembers.map((m) => {
+                  const color = CLASS_COLORS[m.parsedClass];
+                  return (
+                    <div key={m.id} className="flex items-center gap-2 rounded-lg border border-gray-700/30 bg-gray-900/40 px-3 py-2" style={{ borderLeftColor: color, borderLeftWidth: '3px' }}>
+                      <span className="text-sm">{CLASS_ICONS[m.parsedClass]}</span>
+                      <span className="text-sm font-bold text-gray-400 truncate flex-1">{m.name}</span>
+                      <span className="text-xs" style={{ color }}>{m.parsedSpec}</span>
+                      <button onClick={() => unexcludePlayer(m.id)} className="text-green-400 hover:text-green-300 transition-colors" title="Put back in pool">
+                        <UserPlus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Roster + Candidates */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="space-y-4">
+          <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Raid Roster</h3>
+
+          <div className="bg-blue-900/20 border border-blue-700/30 rounded-xl p-3">
+            <div className="flex items-center gap-2 mb-3"><span>🛡️</span><span className="text-sm font-bold text-blue-300">Tanks</span><span className="ml-auto text-xs text-blue-400 bg-blue-900/40 px-2 py-0.5 rounded-full">{selectedTanks.length}/{requirements.tanks}</span></div>
+            <div className="space-y-2">
+              {selectedTanks.map((m) => <SlotRow key={m.id} member={m} slot="tanks" />)}
+              {selectedTanks.length < requirements.tanks && <div className="text-xs text-blue-200/70 border border-dashed border-blue-800/40 rounded-lg p-2 text-center">{requirements.tanks - selectedTanks.length} more needed</div>}
+            </div>
+          </div>
+
+          <div className="bg-green-900/20 border border-green-700/30 rounded-xl p-3">
+            <div className="flex items-center gap-2 mb-3"><span>💚</span><span className="text-sm font-bold text-green-300">Healers</span><span className="ml-auto text-xs text-green-400 bg-green-900/40 px-2 py-0.5 rounded-full">{selectedHealers.length}/{requirements.healers}</span></div>
+            <div className="space-y-2">
+              {selectedHealers.map((m) => <SlotRow key={m.id} member={m} slot="healers" />)}
+              {selectedHealers.length < requirements.healers && <div className="text-xs text-green-200/70 border border-dashed border-green-800/40 rounded-lg p-2 text-center">{requirements.healers - selectedHealers.length} more needed</div>}
+            </div>
+          </div>
+
+          <div className="bg-red-900/20 border border-red-700/30 rounded-xl p-3">
+            <div className="flex items-center gap-2 mb-3"><span>⚔️</span><span className="text-sm font-bold text-red-300">DPS</span><span className="ml-auto text-xs text-red-400 bg-red-900/40 px-2 py-0.5 rounded-full">{selectedDPS.length}/{requirements.dps}</span></div>
+            <div className="space-y-2">
+              {selectedDPS.map((m) => <SlotRow key={m.id} member={m} slot="dps" />)}
+              {selectedDPS.length < requirements.dps && <div className="text-xs text-red-200/70 border border-dashed border-red-800/40 rounded-lg p-2 text-center">{requirements.dps - selectedDPS.length} more needed</div>}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Candidates for {DAY_OPTIONS.find((d) => d.value === targetDay)?.label} @ {targetTime}</h3>
+
+          <div className="bg-blue-900/10 border border-blue-700/20 rounded-xl p-3">
+            <div className="flex items-center gap-2 mb-2"><span>🛡️</span><span className="text-sm font-bold text-blue-300">Tanks ({availableTanks.length})</span></div>
+            <div className="space-y-2">{availableTanks.length === 0 ? <p className="text-xs text-gray-600 italic px-2">None in this role</p> : availableTanks.map((m) => <CandidateRow key={m.id} member={m} slot="tanks" />)}</div>
+          </div>
+
+          <div className="bg-green-900/10 border border-green-700/20 rounded-xl p-3">
+            <div className="flex items-center gap-2 mb-2"><span>💚</span><span className="text-sm font-bold text-green-300">Healers ({availableHealers.length})</span></div>
+            <div className="space-y-2">{availableHealers.length === 0 ? <p className="text-xs text-gray-600 italic px-2">None in this role</p> : availableHealers.map((m) => <CandidateRow key={m.id} member={m} slot="healers" />)}</div>
+          </div>
+
+          <div className="bg-red-900/10 border border-red-700/20 rounded-xl p-3">
+            <div className="flex items-center gap-2 mb-2"><span>⚔️</span><span className="text-sm font-bold text-red-300">DPS ({availableDPS.length})</span></div>
+            <div className="space-y-2">{availableDPS.length === 0 ? <p className="text-xs text-gray-600 italic px-2">None in this role</p> : availableDPS.map((m) => <CandidateRow key={m.id} member={m} slot="dps" />)}</div>
+          </div>
+
+          {availableUnknown.length > 0 && (
+            <div className="bg-gray-800/30 border border-gray-700/20 rounded-xl p-3">
+              <div className="flex items-center gap-2 mb-2"><span>❓</span><span className="text-sm font-bold text-gray-400">Unknown Role ({availableUnknown.length})</span></div>
+              <div className="space-y-2">
+                {availableUnknown.map((m) => {
+                  const color = CLASS_COLORS[m.parsedClass];
+                  const avail = getAvailabilityForSlot(m, targetDay, targetTime);
+                  return (
+                    <div key={m.id} className="rounded-xl border border-gray-700/30 bg-gray-800/40 p-2.5" style={{ borderLeftColor: color, borderLeftWidth: '3px' }}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">{CLASS_ICONS[m.parsedClass]}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-sm font-bold text-white truncate">{m.name}</span>
+                            <span className={`text-[11px] px-1.5 py-0.5 rounded-full border ${getStatusClasses(avail.status)}`}>{avail.shortLabel}</span>
+                          </div>
+                          <div className="text-xs" style={{ color }}>{m.parsedSpec}</div>
+                        </div>
+                        <button onClick={() => excludePlayer(m.id)} className="text-gray-600 hover:text-yellow-400 transition-colors" title="Sit"><UserMinus className="w-3.5 h-3.5" /></button>
+                        <div className="flex gap-1">
+                          {(['tanks', 'healers', 'dps'] as const).map((slot) => (
+                            <button key={slot} onClick={() => addToComp(m, slot)} className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors">
+                              {slot === 'tanks' ? '🛡️' : slot === 'healers' ? '💚' : '⚔️'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
