@@ -154,6 +154,12 @@ function parseRowsWithOptionalHeader(rows: string[][], headerIndex: number): Ros
     const objects = rows.slice(headerIndex + 1).map((row) => rowToObject(headerRow, row));
     const members = rowsToMembers(objects);
     if (members.length > 0) return members;
+
+    // A header row was detected but its columns weren't recognised. Fall back to
+    // positional parsing using ONLY the data rows — never the header row itself,
+    // otherwise the header turns into a phantom roster member (e.g. a "member"
+    // named "Name" with availability "Monday"/"Tuesday").
+    return positionalRowsToMembers(rows.slice(headerIndex + 1));
   }
 
   return positionalRowsToMembers(rows);
@@ -179,16 +185,16 @@ function getHeaderScore(row: string[]): number {
   let score = 0;
 
   if (normalized.some((cell) => cell.includes('timestamp'))) score += 2;
-  if (normalized.some((cell) => cell.includes('discord') || cell.includes('character name') || cell === 'name')) score += 2;
-  if (normalized.some((cell) => cell.includes('spec') && cell.includes('class'))) score += 3;
+  if (normalized.some((cell) => cell.includes('discord') || cell.includes('character name') || cell.includes('player name') || cell === 'name')) score += 2;
+  if (normalized.some((cell) => (cell.includes('spec') && cell.includes('class')) || cell === 'spec' || cell === 'class')) score += 3;
   if (normalized.some((cell) => cell.includes('open availability'))) score += 1;
-  if (normalized.some((cell) => cell === 'monday')) score += 2;
-  if (normalized.some((cell) => cell === 'tuesday')) score += 1;
-  if (normalized.some((cell) => cell === 'wednesday')) score += 1;
-  if (normalized.some((cell) => cell === 'thursday')) score += 1;
-  if (normalized.some((cell) => cell === 'friday')) score += 1;
-  if (normalized.some((cell) => cell === 'saturday')) score += 1;
-  if (normalized.some((cell) => cell === 'sunday')) score += 1;
+  for (const day of DAYS) {
+    // Exact keyword matches only ("monday", "mon", …) so data cells like
+    // "SunnyLifton" (contains "sun") can't inflate a data row's score.
+    if (normalized.some((cell) => DAY_HEADER_MAP[day].includes(cell))) {
+      score += day === 'monday' ? 2 : 1;
+    }
+  }
 
   return score;
 }
@@ -218,8 +224,22 @@ function detectColumns(row: RowObject): ColumnMap {
     const normalized = normalizeHeader(header);
 
     if (!map.timestamp && normalized.includes('timestamp')) map.timestamp = header;
-    if (!map.name && (normalized.includes('discord') || normalized.includes('character name') || normalized === 'name')) map.name = header;
-    if (!map.spec && normalized.includes('spec') && normalized.includes('class')) map.spec = header;
+    if (
+      !map.name &&
+      (normalized.includes('discord') ||
+        normalized.includes('character name') ||
+        normalized.includes('player name') ||
+        normalized === 'character' ||
+        normalized.includes('name'))
+    ) {
+      map.name = header;
+    }
+    // Accept "Class / Spec", "Spec", "Class", "Main Spec", … — anything that
+    // looks like the class/spec column. Previously BOTH words were required,
+    // so common headers like "Class" or "Spec" silently disabled header-based
+    // parsing and fell back to positional columns, which misassigns the
+    // Monday–Sunday values when the sheet's column order differs.
+    if (!map.spec && (normalized.includes('spec') || normalized.includes('class'))) map.spec = header;
     if (!map.openAvailability && normalized.includes('open availability')) map.openAvailability = header;
 
     for (const day of DAYS) {
@@ -340,6 +360,14 @@ function normalizeTime(val: string, globalOpen: boolean): string {
 
 function isOpenAvailability(value: string): boolean {
   const lower = String(value ?? '').toLowerCase().trim();
+  if (!lower) return false;
+
+  // Negative answers are NOT open availability. Without this guard, free-text
+  // answers like "No, I don't have open availability" matched the positive
+  // check and made the player show as available on every day of the week.
+  if (/^(no\b|n\/a\b|none\b|not\b)/.test(lower)) return false;
+  if (/\b(don't|do not|doesn't|does not|not really)\b/.test(lower)) return false;
+
   return lower.includes('open availability') || lower.includes('completely open') || lower === 'open';
 }
 

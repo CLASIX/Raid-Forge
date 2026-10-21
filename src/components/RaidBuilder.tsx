@@ -45,10 +45,19 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
   const activeMembersPool = members.filter((m) => !excludedIds.has(m.id));
   const windowCounts = countWindowAvailability(activeMembersPool, targetDay, targetTime);
 
-  const availableTanks = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'Tank' && !selectedIds.has(m.id)), targetDay, targetTime);
-  const availableHealers = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'Healer' && !selectedIds.has(m.id)), targetDay, targetTime);
-  const availableDPS = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'DPS' && !selectedIds.has(m.id)), targetDay, targetTime);
-  const availableUnknown = sortMembersForWindow(activeMembersPool.filter((m) => m.role === 'Unknown' && !selectedIds.has(m.id)), targetDay, targetTime);
+  // Candidates must actually be available for the selected day/time window —
+  // players with no listing that day (or listed too far off) are not shown.
+  const windowAvailablePool = activeMembersPool.filter(
+    (m) => getAvailabilityForSlot(m, targetDay, targetTime).available,
+  );
+  const unavailableHiddenCount = activeMembersPool.filter(
+    (m) => !selectedIds.has(m.id) && !getAvailabilityForSlot(m, targetDay, targetTime).available,
+  ).length;
+
+  const availableTanks = sortMembersForWindow(windowAvailablePool.filter((m) => m.role === 'Tank' && !selectedIds.has(m.id)), targetDay, targetTime);
+  const availableHealers = sortMembersForWindow(windowAvailablePool.filter((m) => m.role === 'Healer' && !selectedIds.has(m.id)), targetDay, targetTime);
+  const availableDPS = sortMembersForWindow(windowAvailablePool.filter((m) => m.role === 'DPS' && !selectedIds.has(m.id)), targetDay, targetTime);
+  const availableUnknown = sortMembersForWindow(windowAvailablePool.filter((m) => m.role === 'Unknown' && !selectedIds.has(m.id)), targetDay, targetTime);
 
   const selectedTanks = raidComp.tanks.map((id) => memberMap.get(id)).filter((m): m is RosterMember => Boolean(m));
   const selectedHealers = raidComp.healers.map((id) => memberMap.get(id)).filter((m): m is RosterMember => Boolean(m));
@@ -303,7 +312,14 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
         </div>
 
         <div className="space-y-4">
-          <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Candidates for {DAY_OPTIONS.find((d) => d.value === targetDay)?.label} @ {targetTime}</h3>
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Candidates for {DAY_OPTIONS.find((d) => d.value === targetDay)?.label} @ {targetTime}</h3>
+            {unavailableHiddenCount > 0 && (
+              <span className="text-xs text-gray-600 italic">
+                {unavailableHiddenCount} player{unavailableHiddenCount === 1 ? '' : 's'} not available at this time hidden
+              </span>
+            )}
+          </div>
 
           <div className="bg-blue-900/10 border border-blue-700/20 rounded-xl p-3">
             <div className="flex items-center gap-2 mb-2"><span>🛡️</span><span className="text-sm font-bold text-blue-300">Tanks ({availableTanks.length})</span></div>

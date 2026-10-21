@@ -4,14 +4,17 @@ import { Day, RosterMember, TIME_SLOTS } from '../types';
  * A player is considered "available" for a time slot if:
  *   - They have full-week open availability, OR
  *   - That specific day is marked "Open", OR
- *   - The slot is their exact preferred time, OR
- *   - The slot is up to 1 hour AFTER their preferred time
- *     (e.g. preferred 8pm → available at 8pm and 9pm, NOT 10pm)
+ *   - The slot is within 1 hour of their preferred time for that day
+ *     (e.g. preferred 9pm → available at 8pm, 9pm, and 10pm; NOT 7pm or 11pm)
  *
  * They are NOT available if:
- *   - The slot is BEFORE their preferred time (they can't start earlier than they said)
- *   - The slot is more than 1 hour after their preferred time
  *   - They have no listing for that day
+ *   - The slot is more than 1 hour before or after their preferred time
+ *   - Their listed time can't be recognised (then only an exact string
+ *     match counts as available)
+ *
+ * Listed times are parsed leniently: "9pm", "9PM", "9 pm", "9:00 PM",
+ * "9:00:00 PM" and 24-hour values like "21:00" all resolve to the 9pm slot.
  */
 
 export type AvailabilityStatus = 'open' | 'exact' | 'within1hr' | 'tooEarly' | 'tooLate' | 'unavailable';
@@ -19,8 +22,34 @@ export type AvailabilityStatus = 'open' | 'exact' | 'within1hr' | 'tooEarly' | '
 const NORMALIZED_TIME_MAP = new Map(TIME_SLOTS.map((slot, index) => [slot.toLowerCase(), index]));
 
 export function getTimeIndex(time: string): number {
-  if (!time) return -1;
-  return NORMALIZED_TIME_MAP.get(time.toLowerCase().trim()) ?? -1;
+  const raw = String(time ?? '').toLowerCase().trim();
+  if (!raw) return -1;
+
+  const direct = NORMALIZED_TIME_MAP.get(raw);
+  if (direct !== undefined) return direct;
+
+  const compact = raw.replace(/\s+/g, '');
+
+  // "9 pm", "9:00 pm", "9:00:00 pm" (spreadsheets often store form times
+  // as real time values instead of the original "9pm" text)
+  const meridiem = compact.match(/^(\d{1,2})(?::\d{2}){0,2}(am|pm)$/);
+  if (meridiem) {
+    const hour = Number(meridiem[1]);
+    if (hour >= 1 && hour <= 12) {
+      return NORMALIZED_TIME_MAP.get(`${hour}${meridiem[2]}`) ?? -1;
+    }
+    return -1;
+  }
+
+  // 24-hour clock: "21:00", "21:00:00", "0:00"
+  const military = compact.match(/^([01]?\d|2[0-3])(?::\d{2}){1,2}$/);
+  if (military) {
+    const hour = Number(military[1]);
+    const label = hour === 0 ? '12am' : hour === 12 ? '12pm' : hour < 12 ? `${hour}am` : `${hour - 12}pm`;
+    return NORMALIZED_TIME_MAP.get(label) ?? -1;
+  }
+
+  return -1;
 }
 
 export function isOpenValue(value: string): boolean {
