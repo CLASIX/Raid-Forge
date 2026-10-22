@@ -1,5 +1,14 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { BuilderState, DEFAULT_BUILDER_STATE, RosterMember, RaidSize, RAID_TIME_OPTIONS } from './types';
+import {
+  BuilderState,
+  DEFAULT_BUILDER_STATE,
+  DEFAULT_PREFERENCES,
+  Preferences,
+  RosterMember,
+  RaidSize,
+  RAID_TIME_OPTIONS,
+  SavedComp,
+} from './types';
 import { parseRosterText, DEFAULT_CSV } from './utils/rosterImport';
 import {
   downloadBackup,
@@ -47,6 +56,12 @@ export default function App() {
     () => restored?.builder ?? DEFAULT_BUILDER_STATE,
   );
 
+  // Which buffs Forever actually has, and any comps saved under a name.
+  const [preferences, setPreferences] = useState<Preferences>(
+    () => restored?.preferences ?? DEFAULT_PREFERENCES,
+  );
+  const [savedComps, setSavedComps] = useState<SavedComp[]>(() => restored?.savedComps ?? []);
+
   const [saveStatus, setSaveStatus] = useState<SaveStatus | null>(null);
   const [restoreNote, setRestoreNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
@@ -55,8 +70,8 @@ export default function App() {
   // Everything the user can change lives in these values. They are written to
   // localStorage on a short debounce so typing in a modal doesn't hit storage on
   // every keystroke.
-  const latest = useRef({ members, raidSize, importSource, builder });
-  latest.current = { members, raidSize, importSource, builder };
+  const latest = useRef({ members, raidSize, importSource, builder, preferences, savedComps });
+  latest.current = { members, raidSize, importSource, builder, preferences, savedComps };
 
   const pendingSave = useRef(false);
 
@@ -69,7 +84,7 @@ export default function App() {
     }, 400);
 
     return () => window.clearTimeout(timer);
-  }, [members, raidSize, importSource, builder]);
+  }, [members, raidSize, importSource, builder, preferences, savedComps]);
 
   // A debounce can be interrupted by the tab closing, so flush on the way out.
   useEffect(() => {
@@ -100,7 +115,7 @@ export default function App() {
   }, [saveStatus?.state]);
 
   const handleExportBackup = () => {
-    downloadBackup({ members, raidSize, importSource, builder });
+    downloadBackup({ members, raidSize, importSource, builder, preferences, savedComps });
     setRestoreNote({ kind: 'ok', text: 'Backup downloaded.' });
   };
 
@@ -115,6 +130,8 @@ export default function App() {
     setRaidSize(snapshot.raidSize);
     setImportSource(snapshot.importSource);
     setBuilder(snapshot.builder);
+    setPreferences(snapshot.preferences);
+    setSavedComps(snapshot.savedComps);
     setRestoreNote({ kind: 'ok', text: `Restored ${snapshot.members.length} members.` });
   };
 
@@ -401,6 +418,10 @@ export default function App() {
                 onRaidSizeChange={setRaidSize}
                 builder={builder}
                 onBuilderChange={setBuilder}
+                preferences={preferences}
+                onPreferencesChange={setPreferences}
+                savedComps={savedComps}
+                onSavedCompsChange={setSavedComps}
               />
             </div>
           </div>

@@ -1,5 +1,8 @@
 import {
   BuilderState,
+  DEFAULT_PREFERENCES,
+  Preferences,
+  SavedComp,
   Day,
   DAYS,
   DEFAULT_BUILDER_STATE,
@@ -22,7 +25,7 @@ import {
 
 const STORAGE_KEY = 'raid-forge:roster';
 const BACKUP_KEY_PREFIX = 'raid-forge:roster:unreadable:';
-const SNAPSHOT_VERSION = 2;
+const SNAPSHOT_VERSION = 3;
 
 export interface RosterSnapshot {
   version: number;
@@ -31,6 +34,8 @@ export interface RosterSnapshot {
   importSource: string;
   members: RosterMember[];
   builder: BuilderState;
+  preferences: Preferences;
+  savedComps: SavedComp[];
 }
 
 export type SaveStatus =
@@ -121,6 +126,34 @@ export function reviveBuilder(raw: unknown): BuilderState {
   };
 }
 
+export function revivePreferences(raw: unknown): Preferences {
+  if (!isRecord(raw)) return { ...DEFAULT_PREFERENCES };
+  return { disabledBuffIds: idList(raw.disabledBuffIds) };
+}
+
+/** Validates a saved comp; returns null when it's too damaged to load. */
+export function reviveSavedComp(raw: unknown): SavedComp | null {
+  if (!isRecord(raw)) return null;
+
+  const name = asString(raw.name).trim();
+  if (!name) return null;
+
+  return {
+    id: asString(raw.id) || `comp-${Math.random().toString(36).slice(2, 10)}`,
+    name: name.slice(0, 60),
+    raidSize: reviveRaidSize(raw.raidSize),
+    builder: reviveBuilder(raw.builder),
+    savedAt: asString(raw.savedAt),
+  };
+}
+
+function reviveSavedComps(value: unknown): SavedComp[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(reviveSavedComp)
+    .filter((comp): comp is SavedComp => comp !== null);
+}
+
 function reviveRaidSize(value: unknown): RaidSize {
   return value === 10 || value === 20 || value === 40 ? value : 20;
 }
@@ -167,6 +200,8 @@ export function loadSnapshot(): RosterSnapshot | null {
       importSource: asString(parsed.importSource, 'Saved roster'),
       members,
       builder: reviveBuilder(parsed.builder),
+      preferences: revivePreferences(parsed.preferences),
+      savedComps: reviveSavedComps(parsed.savedComps),
     };
   } catch {
     return null;
@@ -247,6 +282,8 @@ export async function readBackupFile(file: File): Promise<RosterSnapshot | null>
       importSource: asString(parsed.importSource, `Restored ${file.name}`),
       members,
       builder: reviveBuilder(parsed.builder),
+      preferences: revivePreferences(parsed.preferences),
+      savedComps: reviveSavedComps(parsed.savedComps),
     };
   } catch {
     return null;

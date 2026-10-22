@@ -92,3 +92,25 @@ export const DEFAULT_BUILDER_STATE: BuilderState = {
   comp: { tanks: [], healers: [], dps: [] },
   excludedIds: [],
 };
+
+/**
+ * A comp saved under a name, so Tuesday's 20-man and Saturday's side comp can
+ * both live in the browser instead of living in your head.
+ */
+export interface SavedComp {
+  id: string;
+  name: string;
+  raidSize: RaidSize;
+  builder: BuilderState;
+  savedAt: string;
+}
+
+/**
+ * User preferences that aren't tied to one comp.
+ * `disabledBuffIds` lets you hide buffs Forever doesn't have, without a code change.
+ */
+export interface Preferences {
+  disabledBuffIds: string[];
+}
+
+export const DEFAULT_PREFERENCES: Preferences = { disabledBuffIds: [] };

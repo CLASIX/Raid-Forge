@@ -75,13 +75,23 @@ export interface CoverageSummary {
  * Which buffs/debuffs a single member brings.
  * Class decides coverage; `preferredSpecs` only affects auto-fill tie-breaks.
  */
-export function buffsForMember(member: RosterMember): BuffDef[] {
+export function buffsForMember(member: RosterMember, disabled?: Set<string>): BuffDef[] {
   if (member.parsedClass === 'Unknown') return [];
-  return BUFF_DEFS.filter((def) => def.className === member.parsedClass);
+  return BUFF_DEFS.filter(
+    (def) => def.className === member.parsedClass && !disabled?.has(def.id),
+  );
 }
 
-export function computeCoverage(compMembers: RosterMember[]): CoverageSummary {
-  const entries: CoverageEntry[] = BUFF_DEFS.map((def) => {
+/** Defs the user has switched on, in definition order. */
+export function enabledDefs(disabled: Set<string>): BuffDef[] {
+  return BUFF_DEFS.filter((def) => !disabled.has(def.id));
+}
+
+export function computeCoverage(
+  compMembers: RosterMember[],
+  disabled: Set<string> = new Set(),
+): CoverageSummary {
+  const entries: CoverageEntry[] = enabledDefs(disabled).map((def) => {
     const providers = compMembers.filter((member) => member.parsedClass === def.className);
     return { def, providers, covered: providers.length > 0 };
   });
@@ -106,8 +116,12 @@ export function prefersSpecFor(def: BuffDef, member: RosterMember): boolean {
  * Weight of the buffs this member would newly cover, given what's already picked.
  * Used by auto-fill so it fills scarce utility before raw headcount.
  */
-export function uncoveredValue(member: RosterMember, alreadyCovered: Set<string>): number {
-  return buffsForMember(member)
+export function uncoveredValue(
+  member: RosterMember,
+  alreadyCovered: Set<string>,
+  disabled: Set<string> = new Set(),
+): number {
+  return buffsForMember(member, disabled)
     .filter((def) => !alreadyCovered.has(def.id))
     .reduce((total, def) => {
       const specBonus = prefersSpecFor(def, member) ? 0.5 : 0;

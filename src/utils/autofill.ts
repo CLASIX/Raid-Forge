@@ -19,6 +19,8 @@ export interface AutoFillInput {
   day: Day;
   time: string;
   excludedIds: string[];
+  /** Buffs the user switched off; ignored when scoring so they can't skew picks. */
+  disabledBuffIds?: string[];
 }
 
 /** Higher is better: exact match > open availability > within an hour. */
@@ -36,8 +38,16 @@ function availabilityScore(member: RosterMember, day: Day, time: string): number
   }
 }
 
-export function autoBuildComp({ members, requirements, day, time, excludedIds }: AutoFillInput): RaidCompSelection {
+export function autoBuildComp({
+  members,
+  requirements,
+  day,
+  time,
+  excludedIds,
+  disabledBuffIds = [],
+}: AutoFillInput): RaidCompSelection {
   const excluded = new Set(excludedIds);
+  const disabledBuffs = new Set(disabledBuffIds);
 
   // Only players who are actually available for this window are eligible — same
   // rule the candidate lists use.
@@ -51,7 +61,7 @@ export function autoBuildComp({ members, requirements, day, time, excludedIds }:
   const comp: RaidCompSelection = { tanks: [], healers: [], dps: [] };
 
   const scoreOf = (member: RosterMember): number => {
-    const newBuffs = buffsForMember(member).filter((def) => !covered.has(def.id));
+    const newBuffs = buffsForMember(member, disabledBuffs).filter((def) => !covered.has(def.id));
     const buffValue = newBuffs.reduce(
       (total, def) => total + def.weight + (prefersSpecFor(def, member) ? 0.5 : 0),
       0,
@@ -82,7 +92,7 @@ export function autoBuildComp({ members, requirements, day, time, excludedIds }:
 
       comp[slot].push(best.member.id);
       taken.add(best.member.id);
-      buffsForMember(best.member).forEach((def) => covered.add(def.id));
+      buffsForMember(best.member, disabledBuffs).forEach((def) => covered.add(def.id));
       classCounts.set(best.member.parsedClass, (classCounts.get(best.member.parsedClass) ?? 0) + 1);
     }
   };
