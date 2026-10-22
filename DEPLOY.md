@@ -1,57 +1,41 @@
-# Deploying Raid Forge free (Vercel + optional Neon)
+# Deploying Raid Forge free
 
-**Short version:** this app is 100% client-side React — roster state lives in
-memory and is rebuilt from a CSV/XLSX import or the built-in sample. There is no
-server code, so **Vercel alone is enough and costs $0.** Neon is a Postgres host;
-it only earns its place once you want rosters to *persist* or be *shared between
-people* (officers editing one roster, a link you send to the guild). That part is
-opt-in and also free at this scale.
+**Your setup:** static React app on Vercel + the roster saved in your own browser.
+No database, no accounts, no cost. That's the right fit for one person managing
+one guild's roster.
 
-- Path A — [Vercel only](#path-a--vercel-only-no-database): ~5 minutes, no accounts beyond Vercel.
-- Path B — [Add Neon](#path-b--add-neon-for-sharedpersistent-rosters): ~10 more minutes, needs `api/roster.ts` wired to the UI.
+- [Vercel deploy](#1-deploy-to-vercel) — 5 minutes
+- [How persistence works](#2-how-the-roster-survives-a-reload) — already built in
+- [Backups](#3-backups-the-part-that-actually-matters) — the one thing worth doing
+- [If you ever need sync](#4-if-you-ever-need-multi-device-sync) — unused, held in reserve
 
 ---
 
-## Path A — Vercel only (no database)
+## 1. Deploy to Vercel
 
-The build already produces a single self-contained `dist/index.html` (via
-`vite-plugin-singlefile`), so there are no asset paths or SPA rewrites to get wrong.
+The build produces a single self-contained `dist/index.html` (via
+`vite-plugin-singlefile`), so there are no asset paths or SPA rewrites to get
+wrong. `vercel.json` already specifies the preset, build command, output
+directory, and install command.
 
-### 1. Push the repo to GitHub
+### Via the dashboard
 
-Already done if you're reading this in the repo.
+1. Push the repo to GitHub.
+2. Go to <https://vercel.com/new> → **Import Git Repository** → pick the repo.
+3. Vercel reads `vercel.json` and fills everything in. Leave env vars empty.
+4. **Deploy.**
 
-### 2. Import it on Vercel
+Pushes to your production branch publish to your domain; other branches get
+preview URLs.
 
-1. Go to <https://vercel.com/new> → **Import Git Repository** → pick this repo.
-2. Vercel reads `vercel.json` and pre-fills the right settings:
-   - Framework preset: **Vite**
-   - Build command: `npm run build`
-   - Output directory: `dist`
-   - Install command: `npm ci`
-3. Leave environment variables empty. Click **Deploy**.
-
-Every push to your branch gets a preview URL; pushes to your production branch
-publish to the main domain.
-
-### Or deploy from the CLI
+### Via the CLI
 
 ```bash
 npm i -g vercel
 vercel login
-vercel        # preview deployment
-vercel --prod # production
+vercel          # preview deployment
+vercel --prod   # production
 ```
-
-### 3. That's it
-
-No database = nothing to provision, nothing to break after six months of idling.
-Users' imported rosters are not saved between page reloads (that's true of the
-app today, locally too) — see [Path B](#path-b--add-neon-for-sharedpersistent-rosters)
-if you want that fixed properly.
-
-> **If imports feel slow or the tab freezes on a huge sheet:** the XLSX parser is
-> bundled into the client. Vercel's static hosting is not the bottleneck here.
 
 ### Free-tier reality check (Vercel Hobby)
 
@@ -59,25 +43,76 @@ if you want that fixed properly.
 | --- | --- |
 | Cost | $0, no card |
 | Fast Data Transfer | 100 GB / month |
-| Function invocations | 1,000,000 / month |
-| Active CPU | 4 CPU-hours / month |
 | Deployments | 100 / day |
-| Function max duration | 300s |
+| Build time | 45 min / deploy |
+| Function invocations | 1,000,000 / month (unused here — see §4) |
 | Commercial use | **Not allowed** |
 
-That last row is the one people get bitten by: Vercel's fair-use guidelines
-restrict Hobby to *non-commercial, personal* use. A free guild tool for your own
-raid group is fine; the moment it's for a paying client, has ads/affiliate links
-as a purpose, or someone is paid to build or host it, Vercel wants Pro
-($20/seat/month). For a private guild tool, Hobby is the right fit. If you ever
-outgrow that, Cloudflare Pages or Netlify have similar free static hosting — this
-app is a static folder, so it moves in minutes.
+The last row is the one worth knowing: Vercel's fair-use guidelines restrict
+Hobby to non-commercial, personal use. A private guild tool for your own raid
+group is squarely in that category.
+
+Raid Forge is a static folder of one file, so if you ever want to move it,
+Cloudflare Pages and Netlify host it identically in minutes.
 
 ---
 
-## Path B — Add Neon (for shared/persistent rosters)
+## 2. How the roster survives a reload
 
-This repo already contains the pieces; they're inert until you set `DATABASE_URL`:
+Persistence is built in and needs no configuration. Implementation:
+`src/utils/storage.ts`, wired up in `src/App.tsx`.
+
+- **What's saved:** roster members (including your edits to role, spec, notes and
+  availability), the selected raid size, and the import source label.
+- **Where:** `localStorage` under the key `raid-forge:roster`, as one versioned
+  JSON document.
+- **When:** 400ms after any change, plus an immediate flush if you close or
+  background the tab mid-edit.
+- **On load:** the saved roster is read before the first paint, so you never see
+  the sample data flash first. First-ever visit falls back to the built-in sample.
+
+It's deliberately hard to break:
+
+- Corrupt or hand-edited JSON → ignored, app falls back to the sample roster.
+- Partially damaged data → salvageable members are kept, unusable rows dropped.
+- Unknown class/role values from a future version → coerced to `Unknown` rather
+  than crashing a component.
+- Storage blocked (Safari private mode, cookies off) or full → the app keeps
+  working in memory and tells you in the status bar that changes won't persist.
+
+Look at the top of the page: **"Saved in this browser · just now"** confirms the
+write landed.
+
+### What this does *not* cover
+
+`localStorage` is per-browser and per-device. The roster survives reloads,
+restarts, and closing the tab — but **not** clearing site data, "clear browsing
+data", a different browser, incognito, or a different computer. That's a real
+failure mode, and it's why the next section exists.
+
+---
+
+## 3. Backups (the part that actually matters)
+
+No database means no backup job — so make backups trivial, which is what
+**Export backup** in the status bar does:
+
+- **Export backup** → downloads `raid-forge-backup-YYYY-MM-DD.json`.
+- **Restore** → loads that file back, replacing the current roster.
+
+Do this after any big import and maybe once a month. Drop the file in Google
+Drive, Dropbox, or the guild Discord. It's a few hundred KB, and it's your only
+recovery path if browser data gets wiped.
+
+Restoring is also how you move the roster to another machine: export on the old
+one, restore on the new one.
+
+---
+
+## 4. If you ever need multi-device sync
+
+Not needed for one user on one browser, so it is **not wired up** — but the
+repo already contains a working, tested option for later:
 
 | File | Purpose |
 | --- | --- |
@@ -85,125 +120,28 @@ This repo already contains the pieces; they're inert until you set `DATABASE_URL
 | `api/roster.ts` | Serverless endpoint: `GET /api/roster?id=x`, `PUT /api/roster?id=x` |
 | `.env.example` | What `DATABASE_URL` looks like |
 
-Why a serverless function instead of talking to Postgres from the browser?
-Because the browser would need the connection string in the bundle — that's a
-publish-your-database key. `api/roster.ts` keeps it server-side.
+It's inert until you set `DATABASE_URL`, and nothing in the UI calls it yet. Use
+it if you want officers editing one shared roster, or the roster following you
+across devices. Neon's free plan (100 CU-hours/project/month, 1 GB storage,
+sleeps after 5 idle minutes) covers a guild roster many times over; the tradeoff
+is a ~0.5–1s cold start on the first request after idling.
 
-### 1. Create the Neon project
+If you decide you'll never want that, delete `api/`, `db/`, `.env.example`, and
+the `@neondatabase/serverless` dependency — none of it ships to the browser.
 
-1. <https://neon.com> → sign up (no card) → **Create project**.
-2. Pick a region near your Vercel functions. Vercel functions default to
-   **`iad1` (us-east-1)**, so choose the matching US East region if offered.
-3. Copy the **pooled** connection string (Dashboard → **Connect**, the one with
-   `-pooler` in the host). That's the right one for serverless.
+### Why not connect to Postgres from the browser directly?
 
-### 2. Create the table
-
-Easiest: open the **SQL Editor** in Neon, paste `db/schema.sql`, run it.
-
-Or from your machine:
-
-```bash
-psql "$DATABASE_URL" -f db/schema.sql
-```
-
-### 3. Add the env var on Vercel
-
-Project → **Settings → Environment Variables** → add `DATABASE_URL` with the
-pooled string, for Production *and* Preview → **Redeploy** (env changes don't
-apply to existing deployments).
-
-Locally, copy `.env.example` to `.env` and fill it in. To exercise the function
-locally, run `vercel dev` (plain `npm run dev` serves only the Vite frontend and
-will not run `api/`).
-
-### 4. Verify
-
-```bash
-curl -X PUT https://your-app.vercel.app/api/roster?id=my-guild \
-  -H 'content-type: application/json' \
-  -d '{"data":{"raidSize":20,"members":[]}}'
-
-curl https://your-app.vercel.app/api/roster?id=my-guild
-```
-
-Expected: `{"id":"my-guild","updatedAt":"..."}` then the document back.
-
-### 5. Wire the UI to it
-
-The endpoint is storage-only; the app still loads its sample roster. To actually
-use it, add save/load around the two state values in `src/App.tsx`:
-
-```ts
-const SNAPSHOT_ID = 'my-guild'; // comes from the URL in a real multi-roster setup
-
-async function loadRoster() {
-  const res = await fetch(`/api/roster?id=${SNAPSHOT_ID}`);
-  if (res.status === 404) return null;
-  return (await res.json()).data as { members: RosterMember[]; raidSize: RaidSize };
-}
-
-async function saveRoster(members: RosterMember[], raidSize: RaidSize) {
-  await fetch(`/api/roster?id=${SNAPSHOT_ID}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json', 'x-roster-token': 'change-me' },
-    body: JSON.stringify({ data: { members, raidSize } }),
-  });
-}
-```
-
-Points worth knowing before you wire it up:
-
-- **Lock writes.** Send `x-roster-token` on the first `PUT` and that roster's
-  token is fixed; later writes without the matching header get `403`. Without a
-  token, the roster is an open edit link — fine for a private URL you only send
-  to your guild, not for something you post publicly.
-- **No auth.** There is no login. Anyone with the id can read the roster, and the
-  token lives in the client bundle if you hardcode it. That's acceptable for
-  schedule data; don't reuse it for anything private.
-- **Debounce saves.** Every `PUT` is a function invocation and a DB round trip.
-  Save on explicit "Save" or a 2–5s debounce after edits, not on every keystroke.
-- **Autosave on load conflicts.** Last write wins. If two officers edit at once,
-  one loses. Add an `updatedAt` check before writing if that matters.
-
-### Free-tier reality check (Neon Free)
-
-| Limit | Free |
-| --- | --- |
-| Cost | $0, no card, no time limit |
-| Projects | 100 |
-| Storage | 1 GB per project (20 GB per account) |
-| Compute | 100 CU-hours per project per month |
-| Scale to zero | After 5 min idle (cannot be disabled) |
-| Public network transfer | 5 GB per project per month |
-| Restore window | 6 hours |
-
-A roster of a few hundred players serialized as JSON is tens of kilobytes, so
-storage is a non-issue. The real constraint is **100 CU-hours**: a 0.25 CU compute
-running flat-out lasts ~400 hours/month. Because free computes sleep after 5 idle
-minutes, a guild tool that's used during raid nights costs almost nothing. What
-burns CU-hours is a cron job or health check that touches the DB every minute —
-don't add one "to keep it warm". The first request after idling pays a ~0.5–1s
-cold start; that's the honest tradeoff for free.
+The connection string would have to be in the client bundle, which publishes your
+database credentials. The serverless function exists purely to keep it server-side.
 
 ---
-
-## Which path should you pick?
-
-- **Just want to send the guild a link** → Path A. Ship it tonight, no DB.
-- **Want officers to edit one shared roster, or want imports to survive a reload**
-  → Path B. Start with Path A deployed anyway; Path B is additive.
-- **Want persistence with zero backend, single user, no sharing** → skip Neon
-  and use `localStorage` in `App.tsx`. It's ~10 lines and no account. Neon is
-  only worth it for data shared across devices/people.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
-| `500 ... roster_snapshots table is missing` | `db/schema.sql` was never run |
-| `500 DATABASE_URL is not configured` | env var missing, or you didn't redeploy after adding it |
-| `403 This roster is locked` | write token mismatch — the roster was created with a different one |
-| `400 Pass a roster id...` | id must be lowercase letters/digits/dashes, max 64 chars |
-| Function works locally with `npm run dev` but not `vercel dev` | `npm run dev` doesn't serve `api/` — use `vercel dev` |
-| Build fails on Vercel only | check `npm ci` runs clean locally (lockfile committed) |
+| Status bar shows "Saved in this browser" but the roster reverts | You're in a different browser/profile, or a private window |
+| "Browser storage is full" | Export a backup, then check for other data on the domain; quota is ~5 MB |
+| "This browser is blocking local storage" | Safari private mode, or cookies/site data disabled |
+| Roster reverted after clearing browsing data | Expected — restore your exported backup |
+| Build fails on Vercel only | Run `npm ci && npm run build` locally; the lockfile is committed |
