@@ -1,16 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
-import { RosterMember, RaidSize, Day, RAID_TIME_OPTIONS } from '../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  RosterMember,
+  RaidSize,
+  Day,
+  RAID_TIME_OPTIONS,
+  BuilderState,
+  RaidCompSelection,
+} from '../types';
+import { copyToClipboard, discordTextFrom } from '../utils/shareComp';
 import { CLASS_COLORS, CLASS_ICONS, RAID_COMP_REQUIREMENTS } from '../utils/wowData';
 import { countWindowAvailability, getAvailabilityForSlot, sortMembersForWindow } from '../utils/availability';
-import { CalendarDays, Clock3, Users, X, Wand2, AlertTriangle, UserMinus, UserPlus } from 'lucide-react';
+import { CalendarDays, Clock3, Users, X, Wand2, AlertTriangle, UserMinus, UserPlus, Copy, Check } from 'lucide-react';
 
 interface Props {
   members: RosterMember[];
   raidSize: RaidSize;
   onRaidSizeChange: (size: RaidSize) => void;
+  /** Lifted to App so the comp is saved with the roster instead of dying on refresh. */
+  builder: BuilderState;
+  onBuilderChange: (next: BuilderState) => void;
 }
 
-type GroupedRaidIds = { tanks: string[]; healers: string[]; dps: string[] };
+type GroupedRaidIds = RaidCompSelection;
 
 const DAY_OPTIONS: { value: Day; label: string }[] = [
   { value: 'monday', label: 'Monday' },
@@ -22,21 +33,45 @@ const DAY_OPTIONS: { value: Day; label: string }[] = [
   { value: 'sunday', label: 'Sunday' },
 ];
 
-export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
-  const [targetDay, setTargetDay] = useState<Day>('tuesday');
-  const [targetTime, setTargetTime] = useState('8pm');
-  const [raidComp, setRaidComp] = useState<GroupedRaidIds>({ tanks: [], healers: [], dps: [] });
-  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+export function RaidBuilder({ members, raidSize, onRaidSizeChange, builder, onBuilderChange }: Props) {
+  const { day: targetDay, time: targetTime, comp: raidComp } = builder;
+
+  // Exposed as a Set to keep the existing call sites readable; serialized back
+  // to an array whenever it changes so it survives JSON.
+  const excludedIds = useMemo(() => new Set(builder.excludedIds), [builder.excludedIds]);
+
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  const setTargetDay = (day: Day) => onBuilderChange({ ...builder, day });
+  const setTargetTime = (time: string) => onBuilderChange({ ...builder, time });
+  const setRaidComp = (next: GroupedRaidIds | ((prev: GroupedRaidIds) => GroupedRaidIds)) => {
+    const comp = typeof next === 'function' ? next(builder.comp) : next;
+    onBuilderChange({ ...builder, comp });
+  };
+  const setExcludedIds = (next: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    const resolved = typeof next === 'function' ? next(excludedIds) : next;
+    onBuilderChange({ ...builder, excludedIds: [...resolved] });
+  };
 
   const memberMap = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const requirements = RAID_COMP_REQUIREMENTS[raidSize];
 
+  // Drop ids that are no longer in the roster (e.g. after re-importing). Guarded
+  // so an unchanged comp doesn't rewrite state on every pass.
   useEffect(() => {
-    setRaidComp((prev) => ({
-      tanks: prev.tanks.filter((id) => memberMap.has(id)),
-      healers: prev.healers.filter((id) => memberMap.has(id)),
-      dps: prev.dps.filter((id) => memberMap.has(id)),
-    }));
+    const keep = (ids: string[]) => ids.filter((id) => memberMap.has(id));
+    const tanks = keep(builder.comp.tanks);
+    const healers = keep(builder.comp.healers);
+    const dps = keep(builder.comp.dps);
+
+    const unchanged =
+      tanks.length === builder.comp.tanks.length &&
+      healers.length === builder.comp.healers.length &&
+      dps.length === builder.comp.dps.length;
+    if (unchanged) return;
+
+    onBuilderChange({ ...builder, comp: { tanks, healers, dps } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [memberMap]);
 
   const selectedIds = new Set([...raidComp.tanks, ...raidComp.healers, ...raidComp.dps]);
@@ -93,6 +128,17 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
     const dpsIds = pick(availableDPS, requirements.dps, new Set([...tankIds, ...healerIds]));
     setRaidComp({ tanks: tankIds, healers: healerIds, dps: dpsIds });
   };
+
+  const copyTimer = useRef<number | undefined>(undefined);
+  const handleCopy = async () => {
+    const text = discordTextFrom(members, raidSize, builder, requirements);
+    const ok = await copyToClipboard(text);
+    setCopyState(ok ? 'copied' : 'failed');
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 2500);
+  };
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   const getStatusClasses = (status: string) => {
     if (status === 'exact') return 'bg-emerald-900/40 text-emerald-300 border-emerald-700/40';
@@ -174,6 +220,21 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
               <button onClick={autoFill} className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors">
                 <Wand2 className="w-4 h-4" />
                 Auto Fill
+              </button>
+              <button
+                onClick={handleCopy}
+                disabled={totalInRaid === 0}
+                title={totalInRaid === 0 ? 'Add players to the comp first' : 'Copy the comp as Discord-formatted text'}
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  copyState === 'copied'
+                    ? 'bg-emerald-700 text-white'
+                    : copyState === 'failed'
+                      ? 'bg-red-800 text-white'
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                }`}
+              >
+                {copyState === 'copied' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                {copyState === 'copied' ? 'Copied!' : copyState === 'failed' ? 'Copy blocked' : 'Copy for Discord'}
               </button>
               <button onClick={clearComp} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors">Clear</button>
             </div>

@@ -1,4 +1,14 @@
-import { Day, DAYS, RaidSize, Role, RosterMember, WowClass } from '../types';
+import {
+  BuilderState,
+  Day,
+  DAYS,
+  DEFAULT_BUILDER_STATE,
+  RAID_TIME_OPTIONS,
+  RaidSize,
+  Role,
+  RosterMember,
+  WowClass,
+} from '../types';
 
 /**
  * Local persistence for the roster.
@@ -12,7 +22,7 @@ import { Day, DAYS, RaidSize, Role, RosterMember, WowClass } from '../types';
 
 const STORAGE_KEY = 'raid-forge:roster';
 const BACKUP_KEY_PREFIX = 'raid-forge:roster:unreadable:';
-const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_VERSION = 2;
 
 export interface RosterSnapshot {
   version: number;
@@ -20,12 +30,15 @@ export interface RosterSnapshot {
   raidSize: RaidSize;
   importSource: string;
   members: RosterMember[];
+  builder: BuilderState;
 }
 
 export type SaveStatus =
   | { state: 'saved'; savedAt: string }
   | { state: 'unsaved'; reason: string }
   | { state: 'unavailable'; reason: string };
+
+const TIME_SLOT_SET = new Set<string>(RAID_TIME_OPTIONS);
 
 const ROLES: Role[] = ['Tank', 'Healer', 'DPS', 'Unknown'];
 const CLASSES: WowClass[] = [
@@ -77,6 +90,37 @@ function reviveMember(raw: unknown): RosterMember | null {
   };
 }
 
+function idList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Rebuilds saved builder state. Anything unusable falls back to the default
+ * rather than throwing away the whole snapshot — the roster is the valuable
+ * part, and a broken comp should never cost you your import.
+ */
+export function reviveBuilder(raw: unknown): BuilderState {
+  if (!isRecord(raw)) return { ...DEFAULT_BUILDER_STATE, comp: { tanks: [], healers: [], dps: [] } };
+
+  const day = DAYS.includes(raw.day as Day) ? (raw.day as Day) : DEFAULT_BUILDER_STATE.day;
+  const time =
+    typeof raw.time === 'string' && TIME_SLOT_SET.has(raw.time) ? raw.time : DEFAULT_BUILDER_STATE.time;
+
+  const rawComp = isRecord(raw.comp) ? raw.comp : {};
+
+  return {
+    day,
+    time,
+    comp: {
+      tanks: idList(rawComp.tanks),
+      healers: idList(rawComp.healers),
+      dps: idList(rawComp.dps),
+    },
+    excludedIds: idList(raw.excludedIds),
+  };
+}
+
 function reviveRaidSize(value: unknown): RaidSize {
   return value === 10 || value === 20 || value === 40 ? value : 20;
 }
@@ -122,6 +166,7 @@ export function loadSnapshot(): RosterSnapshot | null {
       raidSize: reviveRaidSize(parsed.raidSize),
       importSource: asString(parsed.importSource, 'Saved roster'),
       members,
+      builder: reviveBuilder(parsed.builder),
     };
   } catch {
     return null;
@@ -201,6 +246,7 @@ export async function readBackupFile(file: File): Promise<RosterSnapshot | null>
       raidSize: reviveRaidSize(parsed.raidSize),
       importSource: asString(parsed.importSource, `Restored ${file.name}`),
       members,
+      builder: reviveBuilder(parsed.builder),
     };
   } catch {
     return null;

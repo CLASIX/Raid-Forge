@@ -62,3 +62,33 @@ export const RAID_TIME_OPTIONS: string[] = TIME_SLOTS.slice(
   TIME_SLOTS.indexOf('10am'),
   TIME_SLOTS.indexOf('12am') + 1,
 );
+
+/**
+ * Member ids in each raid slot. Ids rather than full members so the comp
+ * survives a re-import: members are looked up at render time, and ids that no
+ * longer exist are dropped instead of showing stale data.
+ */
+export interface RaidCompSelection {
+  tanks: string[];
+  healers: string[];
+  dps: string[];
+}
+
+/**
+ * Everything the Raid Builder tab lets you change. Persisted alongside the
+ * roster so a refresh doesn't throw away a comp you just spent ten minutes on.
+ */
+export interface BuilderState {
+  day: Day;
+  time: string;
+  comp: RaidCompSelection;
+  /** Stored as an array, not a Set, so it survives JSON round-tripping. */
+  excludedIds: string[];
+}
+
+export const DEFAULT_BUILDER_STATE: BuilderState = {
+  day: 'tuesday',
+  time: '8pm',
+  comp: { tanks: [], healers: [], dps: [] },
+  excludedIds: [],
+};

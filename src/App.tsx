@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { RosterMember, RaidSize, RAID_TIME_OPTIONS } from './types';
+import { BuilderState, DEFAULT_BUILDER_STATE, RosterMember, RaidSize, RAID_TIME_OPTIONS } from './types';
 import { parseRosterText, DEFAULT_CSV } from './utils/rosterImport';
 import {
   downloadBackup,
@@ -41,16 +41,22 @@ export default function App() {
     restored?.importSource ?? 'Built-in sample roster',
   );
 
+  // The raid comp lives here (not inside RaidBuilder) so it gets saved with the
+  // roster instead of being lost on refresh.
+  const [builder, setBuilder] = useState<BuilderState>(
+    () => restored?.builder ?? DEFAULT_BUILDER_STATE,
+  );
+
   const [saveStatus, setSaveStatus] = useState<SaveStatus | null>(null);
   const [restoreNote, setRestoreNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
 
   // ─── Persistence ───────────────────────────────────────────────────────────
-  // Everything the user can change lives in these three values. They are written
-  // to localStorage on a short debounce so typing in a modal doesn't hit storage
-  // on every keystroke.
-  const latest = useRef({ members, raidSize, importSource });
-  latest.current = { members, raidSize, importSource };
+  // Everything the user can change lives in these values. They are written to
+  // localStorage on a short debounce so typing in a modal doesn't hit storage on
+  // every keystroke.
+  const latest = useRef({ members, raidSize, importSource, builder });
+  latest.current = { members, raidSize, importSource, builder };
 
   const pendingSave = useRef(false);
 
@@ -63,7 +69,7 @@ export default function App() {
     }, 400);
 
     return () => window.clearTimeout(timer);
-  }, [members, raidSize, importSource]);
+  }, [members, raidSize, importSource, builder]);
 
   // A debounce can be interrupted by the tab closing, so flush on the way out.
   useEffect(() => {
@@ -94,7 +100,7 @@ export default function App() {
   }, [saveStatus?.state]);
 
   const handleExportBackup = () => {
-    downloadBackup({ members, raidSize, importSource });
+    downloadBackup({ members, raidSize, importSource, builder });
     setRestoreNote({ kind: 'ok', text: 'Backup downloaded.' });
   };
 
@@ -108,6 +114,7 @@ export default function App() {
     setMembers(snapshot.members);
     setRaidSize(snapshot.raidSize);
     setImportSource(snapshot.importSource);
+    setBuilder(snapshot.builder);
     setRestoreNote({ kind: 'ok', text: `Restored ${snapshot.members.length} members.` });
   };
 
@@ -388,7 +395,13 @@ export default function App() {
               subtitle="Pick a raid day and time, see who fits that window, then auto-build around actual availability"
             />
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-              <RaidBuilder members={members} raidSize={raidSize} onRaidSizeChange={setRaidSize} />
+              <RaidBuilder
+                members={members}
+                raidSize={raidSize}
+                onRaidSizeChange={setRaidSize}
+                builder={builder}
+                onBuilderChange={setBuilder}
+              />
             </div>
           </div>
         )}
