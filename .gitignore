@@ -2,3 +2,11 @@ node_modules/
 dist/
 *.local
 .DS_Store
+
+# local env files (Vercel/production values live in the dashboard)
+.env
+.env.*
+!.env.example
+
+# Vercel CLI project link
+.vercel

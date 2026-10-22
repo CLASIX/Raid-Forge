@@ -1,13 +1,21 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { RosterMember, RaidSize } from './types';
 import { parseRosterText, DEFAULT_CSV } from './utils/rosterImport';
+import {
+  downloadBackup,
+  formatSavedAt,
+  loadSnapshot,
+  readBackupFile,
+  saveSnapshot,
+  type SaveStatus,
+} from './utils/storage';
 import { CSVImport } from './components/CSVImport';
 import { AvailabilityHeatmap } from './components/AvailabilityHeatmap';
 import { RaidBuilder } from './components/RaidBuilder';
 import { ClassBreakdown } from './components/ClassBreakdown';
 import { PlayerAvailability } from './components/PlayerAvailability';
 import { countWindowAvailability } from './utils/availability';
-import { Users, Calendar, BarChart2, Swords, Shield, Upload } from 'lucide-react';
+import { Users, Calendar, BarChart2, Swords, Shield, Upload, Download, RotateCcw, Check, AlertTriangle } from 'lucide-react';
 
 type Tab = 'roster' | 'availability' | 'heatmap' | 'builder' | 'import';
 
@@ -20,10 +28,94 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 export default function App() {
-  const [members, setMembers] = useState<RosterMember[]>(() => parseRosterText(DEFAULT_CSV));
+  // Read saved data once, before any state initialisers run, so the roster shows
+  // up immediately on reload instead of flashing the sample data first.
+  const [restored] = useState(() => loadSnapshot());
+
+  const [members, setMembers] = useState<RosterMember[]>(
+    () => restored?.members ?? parseRosterText(DEFAULT_CSV),
+  );
   const [activeTab, setActiveTab] = useState<Tab>('roster');
-  const [raidSize, setRaidSize] = useState<RaidSize>(10);
-  const [importSource, setImportSource] = useState('Built-in sample roster');
+  const [raidSize, setRaidSize] = useState<RaidSize>(restored?.raidSize ?? 10);
+  const [importSource, setImportSource] = useState(
+    restored?.importSource ?? 'Built-in sample roster',
+  );
+
+  const [saveStatus, setSaveStatus] = useState<SaveStatus | null>(null);
+  const [restoreNote, setRestoreNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
+
+  // ─── Persistence ───────────────────────────────────────────────────────────
+  // Everything the user can change lives in these three values. They are written
+  // to localStorage on a short debounce so typing in a modal doesn't hit storage
+  // on every keystroke.
+  const latest = useRef({ members, raidSize, importSource });
+  latest.current = { members, raidSize, importSource };
+
+  const pendingSave = useRef(false);
+
+  useEffect(() => {
+    pendingSave.current = true;
+
+    const timer = window.setTimeout(() => {
+      setSaveStatus(saveSnapshot(latest.current));
+      pendingSave.current = false;
+    }, 400);
+
+    return () => window.clearTimeout(timer);
+  }, [members, raidSize, importSource]);
+
+  // A debounce can be interrupted by the tab closing, so flush on the way out.
+  useEffect(() => {
+    const flush = () => {
+      if (!pendingSave.current) return;
+      saveSnapshot(latest.current);
+      pendingSave.current = false;
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      flush();
+    };
+  }, []);
+
+  // Keeps the "saved 2m ago" label from freezing on a long-lived tab.
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    if (saveStatus?.state !== 'saved') return;
+    const timer = window.setInterval(() => setClockTick((tick) => tick + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, [saveStatus?.state]);
+
+  const handleExportBackup = () => {
+    downloadBackup({ members, raidSize, importSource });
+    setRestoreNote({ kind: 'ok', text: 'Backup downloaded.' });
+  };
+
+  const handleRestoreBackup = async (file: File) => {
+    const snapshot = await readBackupFile(file);
+    if (!snapshot) {
+      setRestoreNote({ kind: 'error', text: 'That file is not a Raid Forge backup.' });
+      return;
+    }
+
+    setMembers(snapshot.members);
+    setRaidSize(snapshot.raidSize);
+    setImportSource(snapshot.importSource);
+    setRestoreNote({ kind: 'ok', text: `Restored ${snapshot.members.length} members.` });
+  };
+
+  useEffect(() => {
+    if (!restoreNote) return;
+    const timer = window.setTimeout(() => setRestoreNote(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [restoreNote]);
 
   const handleImport = (nextMembers: RosterMember[], sourceLabel: string) => {
     if (nextMembers.length > 0) {
@@ -137,6 +229,65 @@ export default function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-6">
+
+        {/* ─── LOCAL PERSISTENCE BAR ─── */}
+        <div className="flex items-center justify-end gap-x-3 gap-y-2 flex-wrap mb-4 text-xs min-h-6">
+          {saveStatus?.state === 'saved' && saveStatus.savedAt && (
+            <span className="flex items-center gap-1.5 text-gray-500">
+              <Check className="w-3.5 h-3.5 text-green-500" />
+              Saved in this browser · {formatSavedAt(saveStatus.savedAt)}
+            </span>
+          )}
+          {saveStatus?.state === 'unsaved' && (
+            <span className="flex items-center gap-1.5 text-amber-400 max-w-md">
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              {saveStatus.reason}
+            </span>
+          )}
+          {saveStatus?.state === 'unavailable' && (
+            <span className="flex items-center gap-1.5 text-red-400 max-w-md">
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              {saveStatus.reason}
+            </span>
+          )}
+
+          {restoreNote && (
+            <span className={`flex items-center gap-1.5 ${restoreNote.kind === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+              {restoreNote.kind === 'ok'
+                ? <Check className="w-3.5 h-3.5" />
+                : <AlertTriangle className="w-3.5 h-3.5" />}
+              {restoreNote.text}
+            </span>
+          )}
+
+          <button
+            onClick={handleExportBackup}
+            className="flex items-center gap-1.5 text-gray-500 hover:text-yellow-400 transition-colors"
+            title="Download this roster as a JSON file — a safeguard if browser data gets cleared or you switch computers"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export backup
+          </button>
+          <button
+            onClick={() => backupInputRef.current?.click()}
+            className="flex items-center gap-1.5 text-gray-500 hover:text-yellow-400 transition-colors"
+            title="Load a roster from a previously exported backup file"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Restore
+          </button>
+          <input
+            ref={backupInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (file) await handleRestoreBackup(file);
+              e.currentTarget.value = '';
+            }}
+          />
+        </div>
 
         {/* ─── IMPORT TAB ─── */}
         {activeTab === 'import' && (
