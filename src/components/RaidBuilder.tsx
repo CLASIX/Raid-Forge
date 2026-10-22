@@ -8,6 +8,9 @@ import {
   RaidCompSelection,
 } from '../types';
 import { copyToClipboard, discordTextFrom } from '../utils/shareComp';
+import { autoBuildComp } from '../utils/autofill';
+import { buffsForMember, computeCoverage } from '../utils/buffs';
+import { BuffCoverage, MissingBuffChip } from './BuffCoverage';
 import { CLASS_COLORS, CLASS_ICONS, RAID_COMP_REQUIREMENTS } from '../utils/wowData';
 import { countWindowAvailability, getAvailabilityForSlot, sortMembersForWindow } from '../utils/availability';
 import { CalendarDays, Clock3, Users, X, Wand2, AlertTriangle, UserMinus, UserPlus, Copy, Check } from 'lucide-react';
@@ -97,6 +100,11 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange, builder, onBu
   const selectedDPS = raidComp.dps.map((id) => memberMap.get(id)).filter((m): m is RosterMember => Boolean(m));
 
   const totalInRaid = selectedTanks.length + selectedHealers.length + selectedDPS.length;
+
+  const coverage = useMemo(
+    () => computeCoverage([...selectedTanks, ...selectedHealers, ...selectedDPS]),
+    [selectedTanks, selectedHealers, selectedDPS],
+  );
   const selectedAvailableCount = [...selectedTanks, ...selectedHealers, ...selectedDPS]
     .filter((m) => getAvailabilityForSlot(m, targetDay, targetTime).available).length;
 
@@ -120,13 +128,15 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange, builder, onBu
   const clearExcluded = () => setExcludedIds(new Set());
 
   const autoFill = () => {
-    const pick = (pool: RosterMember[], count: number, taken: Set<string>) =>
-      pool.filter((m) => !taken.has(m.id) && getAvailabilityForSlot(m, targetDay, targetTime).available).slice(0, count).map((m) => m.id);
-
-    const tankIds = pick(availableTanks, requirements.tanks, new Set());
-    const healerIds = pick(availableHealers, requirements.healers, new Set(tankIds));
-    const dpsIds = pick(availableDPS, requirements.dps, new Set([...tankIds, ...healerIds]));
-    setRaidComp({ tanks: tankIds, healers: healerIds, dps: dpsIds });
+    setRaidComp(
+      autoBuildComp({
+        members,
+        requirements,
+        day: targetDay,
+        time: targetTime,
+        excludedIds: builder.excludedIds,
+      }),
+    );
   };
 
   const copyTimer = useRef<number | undefined>(undefined);
@@ -177,6 +187,9 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange, builder, onBu
   const CandidateRow = ({ member, slot }: { member: RosterMember; slot: keyof GroupedRaidIds }) => {
     const color = CLASS_COLORS[member.parsedClass];
     const avail = getAvailabilityForSlot(member, targetDay, targetTime);
+    const missingNames = buffsForMember(member)
+      .filter((def) => coverage.entries.some((entry) => entry.def.id === def.id && !entry.covered))
+      .map((def) => def.name);
     return (
       <div className="flex items-center gap-2 w-full rounded-xl border border-gray-700/30 bg-gray-800/40 p-2.5 hover:border-yellow-500/60 hover:bg-yellow-900/10 transition-all" style={{ borderLeftColor: color, borderLeftWidth: '3px' }}>
         <span className="text-base">{CLASS_ICONS[member.parsedClass]}</span>
@@ -184,6 +197,7 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange, builder, onBu
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-sm font-bold text-white truncate">{member.name}</span>
             <span className={`text-[11px] px-1.5 py-0.5 rounded-full border ${getStatusClasses(avail.status)}`}>{avail.shortLabel}</span>
+            <MissingBuffChip missing={missingNames} />
           </div>
           <div className="text-xs" style={{ color }}>{member.parsedSpec}</div>
         </div>
@@ -289,8 +303,10 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange, builder, onBu
           </div>
         </div>
 
-        {/* Legend + Bench */}
+        {/* Coverage + Legend + Bench */}
         <div className="space-y-4">
+          <BuffCoverage coverage={coverage} compSize={totalInRaid} />
+
           <div className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Availability Window</h3>
             <div className="grid grid-cols-2 gap-2 text-xs">
