@@ -3,10 +3,9 @@ dist/
 *.local
 .DS_Store
 
-# local env files (Vercel/production values live in the dashboard)
+# local env files (nothing in this app needs env vars today)
 .env
 .env.*
-!.env.example
 
 # Vercel CLI project link
 .vercel

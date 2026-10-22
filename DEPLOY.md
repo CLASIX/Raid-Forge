@@ -111,28 +111,18 @@ one, restore on the new one.
 
 ## 4. If you ever need multi-device sync
 
-Not needed for one user on one browser, so it is **not wired up** — but the
-repo already contains a working, tested option for later:
+The roster lives in one browser, so it does not follow you between machines.
+That's intentional: for one person managing one guild it removes an entire
+database, backend, and set of credentials from the project.
 
-| File | Purpose |
-| --- | --- |
-| `db/schema.sql` | One table, `roster_snapshots` (id, `jsonb` data, optional write token) |
-| `api/roster.ts` | Serverless endpoint: `GET /api/roster?id=x`, `PUT /api/roster?id=x` |
-| `.env.example` | What `DATABASE_URL` looks like |
+If that ever changes, the cheapest path is a hosted Postgres with a serverless
+HTTP driver — Neon, Supabase, or Turso. Keep the connection string server-side in
+a Vercel function; never put it in the client bundle, because anything the bundle
+contains is public. Store the roster as a single JSON document rather than a row
+per member, and it will fit comfortably inside every free tier.
 
-It's inert until you set `DATABASE_URL`, and nothing in the UI calls it yet. Use
-it if you want officers editing one shared roster, or the roster following you
-across devices. Neon's free plan (100 CU-hours/project/month, 1 GB storage,
-sleeps after 5 idle minutes) covers a guild roster many times over; the tradeoff
-is a ~0.5–1s cold start on the first request after idling.
-
-If you decide you'll never want that, delete `api/`, `db/`, `.env.example`, and
-the `@neondatabase/serverless` dependency — none of it ships to the browser.
-
-### Why not connect to Postgres from the browser directly?
-
-The connection string would have to be in the client bundle, which publishes your
-database credentials. The serverless function exists purely to keep it server-side.
+That work is not in this repo. `vercel.json` has no `functions` block, there are
+no `api/` routes, and no database dependency — the deploy is a static build.
 
 ---
 
@@ -145,3 +135,4 @@ database credentials. The serverless function exists purely to keep it server-si
 | "This browser is blocking local storage" | Safari private mode, or cookies/site data disabled |
 | Roster reverted after clearing browsing data | Expected — restore your exported backup |
 | Build fails on Vercel only | Run `npm ci && npm run build` locally; the lockfile is committed |
+| Editing a player shows a time like `1am` that isn't in the dropdown list | Kept deliberately — a time imported from a sheet outside 10am–12am stays selectable so it can't be silently blanked |
