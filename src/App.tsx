@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { RosterMember, RaidSize } from './types';
+import { RosterMember, RaidSize, RAID_TIME_OPTIONS } from './types';
 import { parseRosterText, DEFAULT_CSV } from './utils/rosterImport';
 import {
   downloadBackup,
@@ -439,11 +439,10 @@ function BestTimes({ members, raidSize }: { members: RosterMember[]; raidSize: R
     thursday: 'Thursday', friday: 'Friday', saturday: 'Saturday', sunday: 'Sunday',
   };
 
-  const PRIME_SLOTS = ['5pm', '6pm', '7pm', '8pm', '9pm', '10pm', '11pm'];
   const reqs = { 10: { tanks: 2, healers: 2 }, 20: { tanks: 3, healers: 4 }, 40: { tanks: 4, healers: 8 } }[raidSize];
 
   const windows = DAYS_LIST.flatMap((day) =>
-    PRIME_SLOTS.map((time) => {
+    RAID_TIME_OPTIONS.map((time) => {
       const counts = countWindowAvailability(members, day, time);
       return {
         day,

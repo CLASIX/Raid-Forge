@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RosterMember, RaidSize, Day } from '../types';
+import { RosterMember, RaidSize, Day, RAID_TIME_OPTIONS } from '../types';
 import { CLASS_COLORS, CLASS_ICONS, RAID_COMP_REQUIREMENTS } from '../utils/wowData';
 import { countWindowAvailability, getAvailabilityForSlot, sortMembersForWindow } from '../utils/availability';
 import { CalendarDays, Clock3, Users, X, Wand2, AlertTriangle, UserMinus, UserPlus } from 'lucide-react';
@@ -21,8 +21,6 @@ const DAY_OPTIONS: { value: Day; label: string }[] = [
   { value: 'saturday', label: 'Saturday' },
   { value: 'sunday', label: 'Sunday' },
 ];
-
-const RAID_TIMES = ['5pm', '6pm', '7pm', '8pm', '9pm', '10pm', '11pm'];
 
 export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
   const [targetDay, setTargetDay] = useState<Day>('tuesday');
@@ -196,7 +194,7 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
               <div className="relative">
                 <Clock3 className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
                 <select value={targetTime} onChange={(e) => setTargetTime(e.target.value)} className="w-full bg-gray-900 border border-gray-700 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white focus:outline-none focus:border-yellow-500">
-                  {RAID_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  {RAID_TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
             </div>

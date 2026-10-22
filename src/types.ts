@@ -49,3 +49,16 @@ export const TIME_SLOTS = [
   '10am', '11am', '12pm', '1pm', '2pm', '3pm', '4pm', '5pm',
   '6pm', '7pm', '8pm', '9pm', '10pm', '11pm', '12am', '1am', '2am'
 ];
+
+/**
+ * Raid windows you can actually pick: 10am through midnight (12am).
+ *
+ * Sliced out of TIME_SLOTS instead of written out again, so the Raid Builder
+ * dropdown and the "Best Raid Windows" ranking always offer the same slots —
+ * and every option is guaranteed to be one the availability engine understands.
+ * Change the range here and both follow.
+ */
+export const RAID_TIME_OPTIONS: string[] = TIME_SLOTS.slice(
+  TIME_SLOTS.indexOf('10am'),
+  TIME_SLOTS.indexOf('12am') + 1,
+);
