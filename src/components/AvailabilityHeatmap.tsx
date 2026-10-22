@@ -1,5 +1,5 @@
 import React from 'react';
-import { RosterMember, DAYS, TIME_SLOTS, Day } from '../types';
+import { RosterMember, DAYS, RAID_TIME_OPTIONS, Day } from '../types';
 import { CLASS_COLORS, ROLE_ICONS } from '../utils/wowData';
 import { getAvailabilityForSlot } from '../utils/availability';
 
@@ -27,7 +27,7 @@ export function AvailabilityHeatmap({ members }: Props) {
 
   for (const day of DAYS) {
     heatmapData[day] = {};
-    for (const slot of TIME_SLOTS) {
+    for (const slot of RAID_TIME_OPTIONS) {
       const cellMembers: CellData['members'] = [];
       for (const member of members) {
         const result = getAvailabilityForSlot(member, day, slot);
@@ -40,7 +40,7 @@ export function AvailabilityHeatmap({ members }: Props) {
   }
 
   const maxCount = Math.max(
-    ...DAYS.flatMap((day) => TIME_SLOTS.map((slot) => heatmapData[day][slot].count)),
+    ...DAYS.flatMap((day) => RAID_TIME_OPTIONS.map((slot) => heatmapData[day][slot].count)),
     1,
   );
 
@@ -69,7 +69,7 @@ export function AvailabilityHeatmap({ members }: Props) {
         </div>
 
         <div className="space-y-0.5">
-          {TIME_SLOTS.map((slot) => (
+          {RAID_TIME_OPTIONS.map((slot) => (
             <div key={slot} className="flex gap-1 items-center">
               <div className="w-14 text-right text-xs text-gray-500 pr-2 flex-shrink-0">{slot}</div>
               {DAYS.map((day) => {
