@@ -1,4 +1,5 @@
 import React from 'react';
+import { ChevronDown } from 'lucide-react';
 import { CLASS_ICONS } from '../utils/wowData';
 import { BUFF_DEFS, BuffDef, CoverageSummary } from '../utils/buffs';
 
@@ -10,13 +11,24 @@ interface Props {
   disabledIds: Set<string>;
   onToggleBuff: (id: string) => void;
   onEnableAll: () => void;
+  /** Collapsed state is owned by preferences so it survives a reload. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 /**
  * Buff / debuff coverage for the current comp. Missing entries lead, because
  * that's the actionable half — the point is to see what the comp can't bring yet.
  */
-export function BuffCoverage({ coverage, compSize, disabledIds, onToggleBuff, onEnableAll }: Props) {
+export function BuffCoverage({
+  coverage,
+  compSize,
+  disabledIds,
+  onToggleBuff,
+  onEnableAll,
+  collapsed,
+  onToggleCollapsed,
+}: Props) {
   const { entries, coveredCount, totalCount, missingBuffs, missingDebuffs } = coverage;
   const [editing, setEditing] = React.useState(false);
 
@@ -28,19 +40,36 @@ export function BuffCoverage({ coverage, compSize, disabledIds, onToggleBuff, on
   return (
     <div className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Buff Coverage</h3>
+        <button
+          onClick={onToggleCollapsed}
+          aria-expanded={!collapsed}
+          aria-controls="buff-coverage-body"
+          title={collapsed ? 'Show buff coverage' : 'Hide buff coverage'}
+          className="flex items-center gap-1.5 group text-left"
+        >
+          <ChevronDown
+            className={`w-4 h-4 text-gray-500 group-hover:text-gray-300 transition-transform ${
+              collapsed ? '-rotate-90' : ''
+            }`}
+          />
+          <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider group-hover:text-white transition-colors">
+            Buff Coverage
+          </h3>
+        </button>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setEditing((prev) => !prev)}
+          {!collapsed && (
+            <button
+              onClick={() => setEditing((prev) => !prev)}
             className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
               editing
                 ? 'border-yellow-600/60 bg-yellow-900/30 text-yellow-300'
                 : 'border-gray-700 text-gray-500 hover:text-gray-300'
             }`}
-            title="Choose which buffs this server actually has"
-          >
-            {editing ? 'Done' : 'Customize'}
-          </button>
+              title="Choose which buffs this server actually has"
+            >
+              {editing ? 'Done' : 'Customize'}
+            </button>
+          )}
           <span
             className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
               coveredCount === totalCount
@@ -53,6 +82,18 @@ export function BuffCoverage({ coverage, compSize, disabledIds, onToggleBuff, on
         </div>
       </div>
 
+      {collapsed && compSize > 0 && totalCount > 0 && (
+        <p className="text-[11px] text-gray-500">
+          {missingBuffs.length + missingDebuffs.length === 0
+            ? '✓ Full buff and debuff coverage'
+            : `${missingBuffs.length + missingDebuffs.length} gap${
+                missingBuffs.length + missingDebuffs.length === 1 ? '' : 's'
+              } — expand for details`}
+        </p>
+      )}
+
+      {!collapsed && (
+        <>
       {editing && (
         <div className="rounded-xl border border-gray-700/60 bg-gray-900/60 p-2.5 space-y-2">
           <p className="text-[11px] text-gray-500">
@@ -185,6 +226,8 @@ export function BuffCoverage({ coverage, compSize, disabledIds, onToggleBuff, on
               </div>
             </details>
           )}
+        </>
+      )}
         </>
       )}
     </div>

@@ -111,6 +111,11 @@ export interface SavedComp {
  */
 export interface Preferences {
   disabledBuffIds: string[];
+  /** Whether the buff coverage panel starts collapsed. */
+  buffPanelCollapsed: boolean;
 }
 
-export const DEFAULT_PREFERENCES: Preferences = { disabledBuffIds: [] };
+export const DEFAULT_PREFERENCES: Preferences = {
+  disabledBuffIds: [],
+  buffPanelCollapsed: false,
+};

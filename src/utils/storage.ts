@@ -128,7 +128,11 @@ export function reviveBuilder(raw: unknown): BuilderState {
 
 export function revivePreferences(raw: unknown): Preferences {
   if (!isRecord(raw)) return { ...DEFAULT_PREFERENCES };
-  return { disabledBuffIds: idList(raw.disabledBuffIds) };
+  return {
+    disabledBuffIds: idList(raw.disabledBuffIds),
+    // Anything other than an explicit true means expanded.
+    buffPanelCollapsed: raw.buffPanelCollapsed === true,
+  };
 }
 
 /** Validates a saved comp; returns null when it's too damaged to load. */

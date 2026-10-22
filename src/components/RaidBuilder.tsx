@@ -444,6 +444,13 @@ export function RaidBuilder({
               onPreferencesChange({ ...preferences, disabledBuffIds: [...next] });
             }}
             onEnableAll={() => onPreferencesChange({ ...preferences, disabledBuffIds: [] })}
+            collapsed={preferences.buffPanelCollapsed}
+            onToggleCollapsed={() =>
+              onPreferencesChange({
+                ...preferences,
+                buffPanelCollapsed: !preferences.buffPanelCollapsed,
+              })
+            }
           />
 
           <div className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
