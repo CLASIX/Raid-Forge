@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { RosterMember, DAYS, Day, Role, TIME_SLOTS } from '../types';
+import { RosterMember, DAYS, Day, Role, RAID_TIME_OPTIONS } from '../types';
 import { CLASS_COLORS, CLASS_ICONS, ROLE_BG_COLORS, ROLE_ICONS, parseClassFromSpec } from '../utils/wowData';
 import { X, Save, RotateCcw } from 'lucide-react';
 
@@ -20,6 +20,22 @@ const DAY_LABELS: Record<Day, string> = {
 };
 
 const ROLE_OPTIONS: Role[] = ['Tank', 'Healer', 'DPS', 'Unknown'];
+
+/**
+ * Time options for one day's dropdown.
+ *
+ * The picker offers the same 10am-midnight range as the Raid Builder and
+ * heatmap. A member imported at 1am or 2am would otherwise have no matching
+ * <option>, which silently blanks their selection in the UI — so keep any
+ * stored value that falls outside the range selectable, rather than dropping it.
+ */
+function dayTimeOptions(currentValue: string): string[] {
+  const isTime = currentValue !== '' && currentValue !== 'Open';
+  if (isTime && !RAID_TIME_OPTIONS.includes(currentValue)) {
+    return [currentValue, ...RAID_TIME_OPTIONS];
+  }
+  return RAID_TIME_OPTIONS;
+}
 
 export function MemberDetailModal({ member, onClose, onSave }: Props) {
   const [draft, setDraft] = useState<RosterMember>(member);
@@ -163,7 +179,7 @@ export function MemberDetailModal({ member, onClose, onSave }: Props) {
                   >
                     <option value="">Not Listed</option>
                     <option value="Open">Open Availability</option>
-                    {TIME_SLOTS.map((slot) => (
+                    {dayTimeOptions(draft.availability[day] || '').map((slot) => (
                       <option key={slot} value={slot}>{slot}</option>
                     ))}
                   </select>
