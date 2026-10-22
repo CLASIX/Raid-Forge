@@ -1,16 +1,36 @@
-import { useEffect, useMemo, useState } from 'react';
-import { RosterMember, RaidSize, Day, RAID_TIME_OPTIONS } from '../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  RosterMember,
+  RaidSize,
+  Day,
+  RAID_TIME_OPTIONS,
+  BuilderState,
+  RaidCompSelection,
+  Preferences,
+  SavedComp,
+} from '../types';
+import { copyToClipboard, discordTextFrom } from '../utils/shareComp';
+import { autoBuildComp } from '../utils/autofill';
+import { buffsForMember, computeCoverage } from '../utils/buffs';
+import { BuffCoverage, MissingBuffChip } from './BuffCoverage';
 import { CLASS_COLORS, CLASS_ICONS, RAID_COMP_REQUIREMENTS } from '../utils/wowData';
 import { countWindowAvailability, getAvailabilityForSlot, sortMembersForWindow } from '../utils/availability';
-import { CalendarDays, Clock3, Users, X, Wand2, AlertTriangle, UserMinus, UserPlus } from 'lucide-react';
+import { CalendarDays, Clock3, Users, X, Wand2, AlertTriangle, UserMinus, UserPlus, Copy, Check } from 'lucide-react';
 
 interface Props {
   members: RosterMember[];
   raidSize: RaidSize;
   onRaidSizeChange: (size: RaidSize) => void;
+  /** Lifted to App so the comp is saved with the roster instead of dying on refresh. */
+  builder: BuilderState;
+  onBuilderChange: (next: BuilderState) => void;
+  preferences: Preferences;
+  onPreferencesChange: (next: Preferences) => void;
+  savedComps: SavedComp[];
+  onSavedCompsChange: (next: SavedComp[]) => void;
 }
 
-type GroupedRaidIds = { tanks: string[]; healers: string[]; dps: string[] };
+type GroupedRaidIds = RaidCompSelection;
 
 const DAY_OPTIONS: { value: Day; label: string }[] = [
   { value: 'monday', label: 'Monday' },
@@ -22,21 +42,56 @@ const DAY_OPTIONS: { value: Day; label: string }[] = [
   { value: 'sunday', label: 'Sunday' },
 ];
 
-export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
-  const [targetDay, setTargetDay] = useState<Day>('tuesday');
-  const [targetTime, setTargetTime] = useState('8pm');
-  const [raidComp, setRaidComp] = useState<GroupedRaidIds>({ tanks: [], healers: [], dps: [] });
-  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+export function RaidBuilder({
+  members,
+  raidSize,
+  onRaidSizeChange,
+  builder,
+  onBuilderChange,
+  preferences,
+  onPreferencesChange,
+  savedComps,
+  onSavedCompsChange,
+}: Props) {
+  const disabledBuffs = useMemo(() => new Set(preferences.disabledBuffIds), [preferences.disabledBuffIds]);
+  const { day: targetDay, time: targetTime, comp: raidComp } = builder;
+
+  // Exposed as a Set to keep the existing call sites readable; serialized back
+  // to an array whenever it changes so it survives JSON.
+  const excludedIds = useMemo(() => new Set(builder.excludedIds), [builder.excludedIds]);
+
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  const setTargetDay = (day: Day) => onBuilderChange({ ...builder, day });
+  const setTargetTime = (time: string) => onBuilderChange({ ...builder, time });
+  const setRaidComp = (next: GroupedRaidIds | ((prev: GroupedRaidIds) => GroupedRaidIds)) => {
+    const comp = typeof next === 'function' ? next(builder.comp) : next;
+    onBuilderChange({ ...builder, comp });
+  };
+  const setExcludedIds = (next: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    const resolved = typeof next === 'function' ? next(excludedIds) : next;
+    onBuilderChange({ ...builder, excludedIds: [...resolved] });
+  };
 
   const memberMap = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const requirements = RAID_COMP_REQUIREMENTS[raidSize];
 
+  // Drop ids that are no longer in the roster (e.g. after re-importing). Guarded
+  // so an unchanged comp doesn't rewrite state on every pass.
   useEffect(() => {
-    setRaidComp((prev) => ({
-      tanks: prev.tanks.filter((id) => memberMap.has(id)),
-      healers: prev.healers.filter((id) => memberMap.has(id)),
-      dps: prev.dps.filter((id) => memberMap.has(id)),
-    }));
+    const keep = (ids: string[]) => ids.filter((id) => memberMap.has(id));
+    const tanks = keep(builder.comp.tanks);
+    const healers = keep(builder.comp.healers);
+    const dps = keep(builder.comp.dps);
+
+    const unchanged =
+      tanks.length === builder.comp.tanks.length &&
+      healers.length === builder.comp.healers.length &&
+      dps.length === builder.comp.dps.length;
+    if (unchanged) return;
+
+    onBuilderChange({ ...builder, comp: { tanks, healers, dps } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [memberMap]);
 
   const selectedIds = new Set([...raidComp.tanks, ...raidComp.healers, ...raidComp.dps]);
@@ -62,6 +117,11 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
   const selectedDPS = raidComp.dps.map((id) => memberMap.get(id)).filter((m): m is RosterMember => Boolean(m));
 
   const totalInRaid = selectedTanks.length + selectedHealers.length + selectedDPS.length;
+
+  const coverage = useMemo(
+    () => computeCoverage([...selectedTanks, ...selectedHealers, ...selectedDPS], disabledBuffs),
+    [selectedTanks, selectedHealers, selectedDPS, disabledBuffs],
+  );
   const selectedAvailableCount = [...selectedTanks, ...selectedHealers, ...selectedDPS]
     .filter((m) => getAvailabilityForSlot(m, targetDay, targetTime).available).length;
 
@@ -85,14 +145,67 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
   const clearExcluded = () => setExcludedIds(new Set());
 
   const autoFill = () => {
-    const pick = (pool: RosterMember[], count: number, taken: Set<string>) =>
-      pool.filter((m) => !taken.has(m.id) && getAvailabilityForSlot(m, targetDay, targetTime).available).slice(0, count).map((m) => m.id);
-
-    const tankIds = pick(availableTanks, requirements.tanks, new Set());
-    const healerIds = pick(availableHealers, requirements.healers, new Set(tankIds));
-    const dpsIds = pick(availableDPS, requirements.dps, new Set([...tankIds, ...healerIds]));
-    setRaidComp({ tanks: tankIds, healers: healerIds, dps: dpsIds });
+    setRaidComp(
+      autoBuildComp({
+        members,
+        requirements,
+        day: targetDay,
+        time: targetTime,
+        excludedIds: builder.excludedIds,
+        disabledBuffIds: preferences.disabledBuffIds,
+      }),
+    );
   };
+
+  // ─── Named comps ───────────────────────────────────────────────────────────
+  const [compName, setCompName] = useState('');
+  const [saveNote, setSaveNote] = useState('');
+
+  const handleSaveComp = () => {
+    const name = compName.trim();
+    if (!name) {
+      setSaveNote('Give the comp a name first.');
+      return;
+    }
+
+    const existing = savedComps.find((comp) => comp.name.toLowerCase() === name.toLowerCase());
+    const entry = {
+      id: existing?.id ?? `comp-${Date.now().toString(36)}`,
+      name: name.slice(0, 60),
+      raidSize,
+      builder,
+      savedAt: new Date().toISOString(),
+    };
+
+    onSavedCompsChange(
+      existing
+        ? savedComps.map((comp) => (comp.id === existing.id ? entry : comp))
+        : [...savedComps, entry],
+    );
+    setCompName('');
+    setSaveNote(existing ? `Updated "${entry.name}".` : `Saved "${entry.name}".`);
+  };
+
+  const handleLoadComp = (comp: SavedComp) => {
+    onRaidSizeChange(comp.raidSize);
+    onBuilderChange(comp.builder);
+    setSaveNote(`Loaded "${comp.name}".`);
+  };
+
+  const handleDeleteComp = (id: string) => {
+    onSavedCompsChange(savedComps.filter((comp) => comp.id !== id));
+  };
+
+  const copyTimer = useRef<number | undefined>(undefined);
+  const handleCopy = async () => {
+    const text = discordTextFrom(members, raidSize, builder, requirements);
+    const ok = await copyToClipboard(text);
+    setCopyState(ok ? 'copied' : 'failed');
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 2500);
+  };
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   const getStatusClasses = (status: string) => {
     if (status === 'exact') return 'bg-emerald-900/40 text-emerald-300 border-emerald-700/40';
@@ -131,6 +244,9 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
   const CandidateRow = ({ member, slot }: { member: RosterMember; slot: keyof GroupedRaidIds }) => {
     const color = CLASS_COLORS[member.parsedClass];
     const avail = getAvailabilityForSlot(member, targetDay, targetTime);
+    const missingNames = buffsForMember(member, disabledBuffs)
+      .filter((def) => coverage.entries.some((entry) => entry.def.id === def.id && !entry.covered))
+      .map((def) => def.name);
     return (
       <div className="flex items-center gap-2 w-full rounded-xl border border-gray-700/30 bg-gray-800/40 p-2.5 hover:border-yellow-500/60 hover:bg-yellow-900/10 transition-all" style={{ borderLeftColor: color, borderLeftWidth: '3px' }}>
         <span className="text-base">{CLASS_ICONS[member.parsedClass]}</span>
@@ -138,6 +254,7 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-sm font-bold text-white truncate">{member.name}</span>
             <span className={`text-[11px] px-1.5 py-0.5 rounded-full border ${getStatusClasses(avail.status)}`}>{avail.shortLabel}</span>
+            <MissingBuffChip missing={missingNames} />
           </div>
           <div className="text-xs" style={{ color }}>{member.parsedSpec}</div>
         </div>
@@ -174,6 +291,21 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
               <button onClick={autoFill} className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors">
                 <Wand2 className="w-4 h-4" />
                 Auto Fill
+              </button>
+              <button
+                onClick={handleCopy}
+                disabled={totalInRaid === 0}
+                title={totalInRaid === 0 ? 'Add players to the comp first' : 'Copy the comp as Discord-formatted text'}
+                className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  copyState === 'copied'
+                    ? 'bg-emerald-700 text-white'
+                    : copyState === 'failed'
+                      ? 'bg-red-800 text-white'
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                }`}
+              >
+                {copyState === 'copied' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                {copyState === 'copied' ? 'Copied!' : copyState === 'failed' ? 'Copy blocked' : 'Copy for Discord'}
               </button>
               <button onClick={clearComp} className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors">Clear</button>
             </div>
@@ -228,8 +360,99 @@ export function RaidBuilder({ members, raidSize, onRaidSizeChange }: Props) {
           </div>
         </div>
 
-        {/* Legend + Bench */}
+        {/* Coverage + Legend + Bench */}
         <div className="space-y-4">
+          {/* Saved comps */}
+          <div className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
+            <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Saved Comps</h3>
+
+            <div className="flex gap-2">
+              <input
+                value={compName}
+                onChange={(e) => {
+                  setCompName(e.target.value);
+                  setSaveNote('');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSaveComp();
+                }}
+                placeholder="e.g. Tuesday 20-man"
+                className="flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-yellow-500"
+              />
+              <button
+                onClick={handleSaveComp}
+                disabled={totalInRaid === 0}
+                title={totalInRaid === 0 ? 'Build a comp first' : 'Save this comp under a name'}
+                className="px-3 py-2 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-40 disabled:cursor-not-allowed text-black font-bold rounded-lg text-sm transition-colors"
+              >
+                Save
+              </button>
+            </div>
+
+            {saveNote && <p className="text-[11px] text-green-400">{saveNote}</p>}
+
+            {savedComps.length === 0 ? (
+              <p className="text-xs text-gray-600">
+                No saved comps yet. Saving keeps Tuesday&apos;s and Saturday&apos;s separate.
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                {savedComps.map((comp) => {
+                  const size =
+                    comp.builder.comp.tanks.length +
+                    comp.builder.comp.healers.length +
+                    comp.builder.comp.dps.length;
+                  return (
+                    <div
+                      key={comp.id}
+                      className="flex items-center gap-2 rounded-lg border border-gray-700/40 bg-gray-900/50 px-2.5 py-1.5"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold text-white truncate">{comp.name}</div>
+                        <div className="text-[10px] text-gray-500">
+                          {comp.raidSize}M · {size} picked · {comp.builder.day.slice(0, 3)} {comp.builder.time}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleLoadComp(comp)}
+                        className="text-[11px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                      >
+                        Load
+                      </button>
+                      <button
+                        onClick={() => handleDeleteComp(comp.id)}
+                        className="text-red-400/80 hover:text-red-300 transition-colors"
+                        title="Delete saved comp"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <BuffCoverage
+            coverage={coverage}
+            compSize={totalInRaid}
+            disabledIds={disabledBuffs}
+            onToggleBuff={(id) => {
+              const next = new Set(preferences.disabledBuffIds);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              onPreferencesChange({ ...preferences, disabledBuffIds: [...next] });
+            }}
+            onEnableAll={() => onPreferencesChange({ ...preferences, disabledBuffIds: [] })}
+            collapsed={preferences.buffPanelCollapsed}
+            onToggleCollapsed={() =>
+              onPreferencesChange({
+                ...preferences,
+                buffPanelCollapsed: !preferences.buffPanelCollapsed,
+              })
+            }
+          />
+
           <div className="rounded-2xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Availability Window</h3>
             <div className="grid grid-cols-2 gap-2 text-xs">

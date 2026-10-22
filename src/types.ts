@@ -62,3 +62,60 @@ export const RAID_TIME_OPTIONS: string[] = TIME_SLOTS.slice(
   TIME_SLOTS.indexOf('10am'),
   TIME_SLOTS.indexOf('12am') + 1,
 );
+
+/**
+ * Member ids in each raid slot. Ids rather than full members so the comp
+ * survives a re-import: members are looked up at render time, and ids that no
+ * longer exist are dropped instead of showing stale data.
+ */
+export interface RaidCompSelection {
+  tanks: string[];
+  healers: string[];
+  dps: string[];
+}
+
+/**
+ * Everything the Raid Builder tab lets you change. Persisted alongside the
+ * roster so a refresh doesn't throw away a comp you just spent ten minutes on.
+ */
+export interface BuilderState {
+  day: Day;
+  time: string;
+  comp: RaidCompSelection;
+  /** Stored as an array, not a Set, so it survives JSON round-tripping. */
+  excludedIds: string[];
+}
+
+export const DEFAULT_BUILDER_STATE: BuilderState = {
+  day: 'tuesday',
+  time: '8pm',
+  comp: { tanks: [], healers: [], dps: [] },
+  excludedIds: [],
+};
+
+/**
+ * A comp saved under a name, so Tuesday's 20-man and Saturday's side comp can
+ * both live in the browser instead of living in your head.
+ */
+export interface SavedComp {
+  id: string;
+  name: string;
+  raidSize: RaidSize;
+  builder: BuilderState;
+  savedAt: string;
+}
+
+/**
+ * User preferences that aren't tied to one comp.
+ * `disabledBuffIds` lets you hide buffs Forever doesn't have, without a code change.
+ */
+export interface Preferences {
+  disabledBuffIds: string[];
+  /** Whether the buff coverage panel starts collapsed. */
+  buffPanelCollapsed: boolean;
+}
+
+export const DEFAULT_PREFERENCES: Preferences = {
+  disabledBuffIds: [],
+  buffPanelCollapsed: false,
+};

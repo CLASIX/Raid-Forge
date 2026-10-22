@@ -1,4 +1,17 @@
-import { Day, DAYS, RaidSize, Role, RosterMember, WowClass } from '../types';
+import {
+  BuilderState,
+  DEFAULT_PREFERENCES,
+  Preferences,
+  SavedComp,
+  Day,
+  DAYS,
+  DEFAULT_BUILDER_STATE,
+  RAID_TIME_OPTIONS,
+  RaidSize,
+  Role,
+  RosterMember,
+  WowClass,
+} from '../types';
 
 /**
  * Local persistence for the roster.
@@ -12,7 +25,7 @@ import { Day, DAYS, RaidSize, Role, RosterMember, WowClass } from '../types';
 
 const STORAGE_KEY = 'raid-forge:roster';
 const BACKUP_KEY_PREFIX = 'raid-forge:roster:unreadable:';
-const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_VERSION = 3;
 
 export interface RosterSnapshot {
   version: number;
@@ -20,12 +33,17 @@ export interface RosterSnapshot {
   raidSize: RaidSize;
   importSource: string;
   members: RosterMember[];
+  builder: BuilderState;
+  preferences: Preferences;
+  savedComps: SavedComp[];
 }
 
 export type SaveStatus =
   | { state: 'saved'; savedAt: string }
   | { state: 'unsaved'; reason: string }
   | { state: 'unavailable'; reason: string };
+
+const TIME_SLOT_SET = new Set<string>(RAID_TIME_OPTIONS);
 
 const ROLES: Role[] = ['Tank', 'Healer', 'DPS', 'Unknown'];
 const CLASSES: WowClass[] = [
@@ -77,6 +95,69 @@ function reviveMember(raw: unknown): RosterMember | null {
   };
 }
 
+function idList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Rebuilds saved builder state. Anything unusable falls back to the default
+ * rather than throwing away the whole snapshot — the roster is the valuable
+ * part, and a broken comp should never cost you your import.
+ */
+export function reviveBuilder(raw: unknown): BuilderState {
+  if (!isRecord(raw)) return { ...DEFAULT_BUILDER_STATE, comp: { tanks: [], healers: [], dps: [] } };
+
+  const day = DAYS.includes(raw.day as Day) ? (raw.day as Day) : DEFAULT_BUILDER_STATE.day;
+  const time =
+    typeof raw.time === 'string' && TIME_SLOT_SET.has(raw.time) ? raw.time : DEFAULT_BUILDER_STATE.time;
+
+  const rawComp = isRecord(raw.comp) ? raw.comp : {};
+
+  return {
+    day,
+    time,
+    comp: {
+      tanks: idList(rawComp.tanks),
+      healers: idList(rawComp.healers),
+      dps: idList(rawComp.dps),
+    },
+    excludedIds: idList(raw.excludedIds),
+  };
+}
+
+export function revivePreferences(raw: unknown): Preferences {
+  if (!isRecord(raw)) return { ...DEFAULT_PREFERENCES };
+  return {
+    disabledBuffIds: idList(raw.disabledBuffIds),
+    // Anything other than an explicit true means expanded.
+    buffPanelCollapsed: raw.buffPanelCollapsed === true,
+  };
+}
+
+/** Validates a saved comp; returns null when it's too damaged to load. */
+export function reviveSavedComp(raw: unknown): SavedComp | null {
+  if (!isRecord(raw)) return null;
+
+  const name = asString(raw.name).trim();
+  if (!name) return null;
+
+  return {
+    id: asString(raw.id) || `comp-${Math.random().toString(36).slice(2, 10)}`,
+    name: name.slice(0, 60),
+    raidSize: reviveRaidSize(raw.raidSize),
+    builder: reviveBuilder(raw.builder),
+    savedAt: asString(raw.savedAt),
+  };
+}
+
+function reviveSavedComps(value: unknown): SavedComp[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(reviveSavedComp)
+    .filter((comp): comp is SavedComp => comp !== null);
+}
+
 function reviveRaidSize(value: unknown): RaidSize {
   return value === 10 || value === 20 || value === 40 ? value : 20;
 }
@@ -122,6 +203,9 @@ export function loadSnapshot(): RosterSnapshot | null {
       raidSize: reviveRaidSize(parsed.raidSize),
       importSource: asString(parsed.importSource, 'Saved roster'),
       members,
+      builder: reviveBuilder(parsed.builder),
+      preferences: revivePreferences(parsed.preferences),
+      savedComps: reviveSavedComps(parsed.savedComps),
     };
   } catch {
     return null;
@@ -201,6 +285,9 @@ export async function readBackupFile(file: File): Promise<RosterSnapshot | null>
       raidSize: reviveRaidSize(parsed.raidSize),
       importSource: asString(parsed.importSource, `Restored ${file.name}`),
       members,
+      builder: reviveBuilder(parsed.builder),
+      preferences: revivePreferences(parsed.preferences),
+      savedComps: reviveSavedComps(parsed.savedComps),
     };
   } catch {
     return null;
